@@ -88,20 +88,17 @@ async def generate_image(req: ImageRequest, request: Request):
         images = []
         saved_files = []
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        udir = _user_dir(user) if user else None
-        prefix = f"{user}/" if user else ""
+        # Always save to file to avoid OOM; anonymous uses _anon dir
+        adir = _user_dir(user) if user else _user_dir("_anon")
+        prefix = f"{user}/" if user else "_anon/"
 
         for idx, item in enumerate(result.data):
             b64 = item.b64_json
             if b64:
-                # Save to file first, return file URL instead of base64
-                if udir:
-                    filename = f"{ts}_{idx+1}.jpg"
-                    (udir / filename).write_bytes(base64.b64decode(b64))
-                    saved_files.append(f"{prefix}{filename}")
-                    images.append(f"/output/{prefix}{filename}")
-                else:
-                    images.append(f"data:image/jpeg;base64,{b64}")
+                filename = f"{ts}_{idx+1}.jpg"
+                (adir / filename).write_bytes(base64.b64decode(b64))
+                saved_files.append(f"{prefix}{filename}")
+                images.append(f"/output/{prefix}{filename}")
             elif item.url:
                 images.append(item.url)
 
@@ -173,19 +170,16 @@ async def edit_image(
         result_images = []
         saved_files = []
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        udir = _user_dir(user) if user else None
-        prefix = f"{user}/" if user else ""
+        adir = _user_dir(user) if user else _user_dir("_anon")
+        prefix = f"{user}/" if user else "_anon/"
 
         for idx, item in enumerate(result.data):
             b64 = item.b64_json
             if b64:
-                if udir:
-                    filename = f"{ts}_edit_{idx+1}.jpg"
-                    (udir / filename).write_bytes(base64.b64decode(b64))
-                    saved_files.append(f"{prefix}{filename}")
-                    result_images.append(f"/output/{prefix}{filename}")
-                else:
-                    result_images.append(f"data:image/png;base64,{b64}")
+                filename = f"{ts}_edit_{idx+1}.jpg"
+                (adir / filename).write_bytes(base64.b64decode(b64))
+                saved_files.append(f"{prefix}{filename}")
+                result_images.append(f"/output/{prefix}{filename}")
             elif item.url:
                 result_images.append(item.url)
 
