@@ -434,7 +434,7 @@
                          @dragleave="dragLeave($event)"
                          @drop="drop(i, $event)"
                          @dragend="dragEnd">
-                        <img :src="f">
+                        <img :src="f" @click.stop="previewImg(f)" style="cursor:pointer;" title="点击放大">
                         <span style="position:absolute;bottom:2px;left:4px;font-size:10px;color:#a78bfa;text-shadow:0 0 3px #000;">{{ i+1 }}</span>
                         <button class="remove" @click="removeFile(i)">×</button>
                     </div>
