@@ -2,6 +2,7 @@ import os
 import json
 import base64
 import traceback
+import gc
 from datetime import datetime
 from pathlib import Path
 import hashlib
@@ -84,39 +85,44 @@ async def generate_image(req: ImageRequest, request: Request):
             quality=req.quality,
             output_format="jpeg",
         )
-        data = json.loads(result.model_dump_json())
         images = []
-        for item in data["data"]:
-            if item.get("b64_json"):
-                images.append(f"data:image/jpeg;base64,{item['b64_json']}")
-            elif item.get("url"):
-                images.append(item["url"])
+        saved_files = []
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        udir = _user_dir(user) if user else None
+        prefix = f"{user}/" if user else ""
 
-        # Save images and record history (skip for anonymous)
-        if user:
-            udir = _user_dir(user)
-            prefix = f"{user}/"
-            saved_files = []
-            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            for idx, item in enumerate(data["data"]):
-                if item.get("b64_json"):
+        for idx, item in enumerate(result.data):
+            b64 = item.b64_json
+            if b64:
+                # Save to file first, return file URL instead of base64
+                if udir:
                     filename = f"{ts}_{idx+1}.jpg"
-                    (udir / filename).write_bytes(base64.b64decode(item["b64_json"]))
+                    (udir / filename).write_bytes(base64.b64decode(b64))
                     saved_files.append(f"{prefix}{filename}")
+                    images.append(f"/output/{prefix}{filename}")
+                else:
+                    images.append(f"data:image/jpeg;base64,{b64}")
+            elif item.url:
+                images.append(item.url)
 
-            if saved_files:
-                record = {
-                    "id": ts,
-                    "time": datetime.now().isoformat(),
-                    "prompt": req.prompt,
-                    "size": req.size,
-                    "quality": req.quality,
-                    "n": req.n,
-                    "files": saved_files,
-                }
-                history = _load_history(user)
-                history.insert(0, record)
-                _save_history(user, history)
+        # Clear API response from memory
+        del result
+        gc.collect()
+
+        # Record history
+        if user and saved_files:
+            record = {
+                "id": ts,
+                "time": datetime.now().isoformat(),
+                "prompt": req.prompt,
+                "size": req.size,
+                "quality": req.quality,
+                "n": req.n,
+                "files": saved_files,
+            }
+            history = _load_history(user)
+            history.insert(0, record)
+            _save_history(user, history)
 
         return {"images": images}
     except APIStatusError as e:
@@ -161,41 +167,48 @@ async def edit_image(
             size=size,
             quality=quality,
         )
-        data = json.loads(result.model_dump_json())
+        # Free upload data
+        del image_files
+
         result_images = []
-        for item in data["data"]:
-            if item.get("b64_json"):
-                result_images.append(f"data:image/png;base64,{item['b64_json']}")
-            elif item.get("url"):
-                result_images.append(item["url"])
+        saved_files = []
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        udir = _user_dir(user) if user else None
+        prefix = f"{user}/" if user else ""
 
-        # Save images and record history (skip for anonymous)
-        if user:
-            udir = _user_dir(user)
-            prefix = f"{user}/"
-            saved_files = []
-            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            for idx, item in enumerate(data["data"]):
-                if item.get("b64_json"):
+        for idx, item in enumerate(result.data):
+            b64 = item.b64_json
+            if b64:
+                if udir:
                     filename = f"{ts}_edit_{idx+1}.jpg"
-                    (udir / filename).write_bytes(base64.b64decode(item["b64_json"]))
+                    (udir / filename).write_bytes(base64.b64decode(b64))
                     saved_files.append(f"{prefix}{filename}")
+                    result_images.append(f"/output/{prefix}{filename}")
+                else:
+                    result_images.append(f"data:image/png;base64,{b64}")
+            elif item.url:
+                result_images.append(item.url)
 
-            if saved_files:
-                record = {
-                    "id": ts,
-                    "time": datetime.now().isoformat(),
-                    "prompt": prompt,
-                    "size": size,
-                    "quality": quality,
-                    "n": n,
-                    "type": "edit",
-                    "input_images": [img.filename for img in images],
-                    "files": saved_files,
-                }
-                history = _load_history(user)
-                history.insert(0, record)
-                _save_history(user, history)
+        # Clear API response from memory
+        del result
+        gc.collect()
+
+        # Record history
+        if user and saved_files:
+            record = {
+                "id": ts,
+                "time": datetime.now().isoformat(),
+                "prompt": prompt,
+                "size": size,
+                "quality": quality,
+                "n": n,
+                "type": "edit",
+                "input_images": [img.filename for img in images],
+                "files": saved_files,
+            }
+            history = _load_history(user)
+            history.insert(0, record)
+            _save_history(user, history)
 
         return {"images": result_images}
     except APIStatusError as e:
