@@ -1,0 +1,755 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GPT Image Generator</title>
+    <link rel="icon" href="/favicon.ico">
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+            min-height: 100vh;
+            color: #e0e0e0;
+        }
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 40px 20px;
+        }
+        .status-bar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 8px 16px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            font-size: 0.85rem;
+        }
+        .status-bar.local {
+            background: rgba(34,197,94,0.12);
+            border: 1px solid rgba(34,197,94,0.3);
+            color: #86efac;
+        }
+        .status-bar.logged-in {
+            background: rgba(96,165,250,0.12);
+            border: 1px solid rgba(96,165,250,0.3);
+            color: #93c5fd;
+        }
+        .status-bar.anonymous {
+            background: rgba(251,191,36,0.12);
+            border: 1px solid rgba(251,191,36,0.3);
+            color: #fcd34d;
+        }
+        .status-bar .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 8px;
+        }
+        .status-bar.local .status-dot { background: #22c55e; }
+        .status-bar.logged-in .status-dot { background: #60a5fa; }
+        .status-bar.anonymous .status-dot { background: #fbbf24; }
+        .status-bar .login-link {
+            color: #60a5fa;
+            text-decoration: none;
+            font-weight: 500;
+        }
+        .status-bar .login-link:hover { text-decoration: underline; }
+        h1 {
+            text-align: center;
+            font-size: 2rem;
+            margin-bottom: 30px;
+            background: linear-gradient(90deg, #a78bfa, #60a5fa);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .form-section {
+            background: rgba(255,255,255,0.05);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 16px;
+            padding: 24px;
+            margin-bottom: 24px;
+        }
+        .form-group {
+            margin-bottom: 16px;
+        }
+        label {
+            display: block;
+            margin-bottom: 6px;
+            font-size: 0.9rem;
+            color: #a0a0a0;
+        }
+        textarea {
+            width: 100%;
+            min-height: 120px;
+            padding: 12px;
+            border-radius: 8px;
+            border: 1px solid rgba(255,255,255,0.15);
+            background: rgba(0,0,0,0.3);
+            color: #e0e0e0;
+            font-size: 0.95rem;
+            resize: vertical;
+        }
+        textarea:focus { outline: none; border-color: #a78bfa; }
+        .options-row {
+            display: flex;
+            gap: 16px;
+            flex-wrap: wrap;
+        }
+        .options-row .form-group { flex: 1; min-width: 140px; }
+        select {
+            width: 100%;
+            padding: 10px 12px;
+            border-radius: 8px;
+            border: 1px solid rgba(255,255,255,0.15);
+            background: rgba(0,0,0,0.3);
+            color: #e0e0e0;
+            font-size: 0.9rem;
+        }
+        select:focus { outline: none; border-color: #a78bfa; }
+        .btn {
+            display: block;
+            width: 100%;
+            padding: 14px;
+            border: none;
+            border-radius: 10px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            background: linear-gradient(135deg, #a78bfa, #60a5fa);
+            color: #fff;
+            transition: opacity 0.2s;
+        }
+        .btn:hover { opacity: 0.9; }
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        .result-section {
+            margin-top: 24px;
+        }
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #a78bfa;
+            font-size: 1.1rem;
+        }
+        .loading::after {
+            content: '';
+            animation: dots 1.5s infinite;
+        }
+        @keyframes dots {
+            0% { content: ''; }
+            25% { content: '.'; }
+            50% { content: '..'; }
+            75% { content: '...'; }
+        }
+        .error {
+            background: rgba(239,68,68,0.1);
+            border: 1px solid rgba(239,68,68,0.3);
+            border-radius: 10px;
+            padding: 16px;
+            color: #fca5a5;
+            white-space: pre-wrap;
+            word-break: break-word;
+            font-size: 0.85rem;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .image-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 16px;
+        }
+        .image-card {
+            border-radius: 12px;
+            overflow: hidden;
+            border: 1px solid rgba(255,255,255,0.1);
+            background: rgba(0,0,0,0.2);
+        }
+        .image-card img {
+            width: 100%;
+            display: block;
+        }
+        .image-actions {
+            padding: 10px;
+            text-align: center;
+        }
+        .image-actions a {
+            color: #60a5fa;
+            text-decoration: none;
+            font-size: 0.85rem;
+        }
+        .image-actions a:hover { text-decoration: underline; }
+        .upload-section {
+            margin-bottom: 16px;
+        }
+        .upload-area {
+            border: 2px dashed rgba(255,255,255,0.15);
+            border-radius: 10px;
+            padding: 16px;
+            text-align: center;
+            cursor: pointer;
+            transition: border-color 0.2s;
+            position: relative;
+        }
+        .upload-area:hover { border-color: #a78bfa; }
+        .upload-area input[type="file"] {
+            position: absolute;
+            inset: 0;
+            opacity: 0;
+            cursor: pointer;
+        }
+        .upload-area .hint {
+            color: #888;
+            font-size: 0.85rem;
+        }
+        .upload-previews {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-top: 10px;
+        }
+        .upload-thumb {
+            position: relative;
+            width: 72px;
+            height: 72px;
+            cursor: grab;
+            transition: transform 0.15s, opacity 0.15s;
+        }
+        .upload-thumb.dragging {
+            opacity: 0.4;
+            transform: scale(0.9);
+        }
+        .upload-thumb.drag-over {
+            transform: scale(1.1);
+            border: 2px solid #a78bfa;
+            border-radius: 8px;
+        }
+        .upload-thumb img {
+            width: 72px;
+            height: 72px;
+            object-fit: cover;
+            border-radius: 6px;
+            border: 1px solid rgba(255,255,255,0.15);
+        }
+        .upload-thumb .remove {
+            position: absolute;
+            top: -6px;
+            right: -6px;
+            width: 18px;
+            height: 18px;
+            background: #f87171;
+            color: #fff;
+            border: none;
+            border-radius: 50%;
+            font-size: 12px;
+            line-height: 18px;
+            text-align: center;
+            cursor: pointer;
+            padding: 0;
+        }
+        .mode-tag {
+            display: inline-block;
+            font-size: 0.75rem;
+            padding: 2px 8px;
+            border-radius: 4px;
+            margin-left: 8px;
+            vertical-align: middle;
+        }
+        .mode-tag.generate { background: rgba(96,165,250,0.2); color: #60a5fa; }
+        .mode-tag.edit { background: rgba(167,139,250,0.2); color: #a78bfa; }
+        .fab-top {
+            position: fixed;
+            bottom: 28px;
+            right: 28px;
+            width: 48px;
+            height: 48px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #a78bfa, #60a5fa);
+            color: #fff;
+            border: none;
+            font-size: 22px;
+            cursor: pointer;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            opacity: 0;
+            transform: translateY(20px);
+            pointer-events: none;
+            transition: opacity 0.25s, transform 0.25s;
+            z-index: 900;
+        }
+        .fab-top.visible {
+            opacity: 1;
+            transform: translateY(0);
+            pointer-events: auto;
+        }
+        .fab-top:hover { box-shadow: 0 6px 24px rgba(167,139,250,0.5); }
+        @media (max-width: 600px) {
+            .fab-top { bottom: 16px; right: 16px; width: 44px; height: 44px; font-size: 20px; }
+        }
+        .history-section {
+            margin-top: 32px;
+        }
+        .history-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+        }
+        .history-header h2 {
+            font-size: 1.3rem;
+            color: #a78bfa;
+        }
+        .history-toggle {
+            background: none;
+            border: 1px solid rgba(255,255,255,0.15);
+            color: #a0a0a0;
+            padding: 6px 14px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.85rem;
+        }
+        .history-toggle:hover { border-color: #a78bfa; color: #e0e0e0; }
+        .history-item {
+            background: rgba(255,255,255,0.03);
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 12px;
+            padding: 16px;
+            margin-bottom: 12px;
+        }
+        .history-meta {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+            font-size: 0.8rem;
+            color: #888;
+        }
+        .history-meta .params { color: #6b7280; }
+        .history-prompt {
+            font-size: 0.85rem;
+            color: #c0c0c0;
+            margin-bottom: 10px;
+            cursor: pointer;
+            max-height: 60px;
+            overflow: hidden;
+            line-height: 1.4;
+        }
+        .history-prompt:hover { color: #e0e0e0; }
+        .history-thumbs {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        .history-thumbs img {
+            width: 80px;
+            height: 80px;
+            object-fit: cover;
+            border-radius: 6px;
+            border: 1px solid rgba(255,255,255,0.1);
+            cursor: pointer;
+        }
+        .use-as-ref {
+            position: absolute;
+            bottom: 2px;
+            right: 2px;
+            width: 20px;
+            height: 20px;
+            background: rgba(96,165,250,0.8);
+            color: #fff;
+            border: none;
+            border-radius: 50%;
+            font-size: 14px;
+            line-height: 20px;
+            text-align: center;
+            cursor: pointer;
+            padding: 0;
+        }
+        .use-as-ref:hover { background: #a78bfa; }
+        .history-actions {
+            display: flex;
+            gap: 12px;
+            margin-top: 8px;
+        }
+        .history-actions a, .history-actions button {
+            font-size: 0.8rem;
+            color: #60a5fa;
+            text-decoration: none;
+            background: none;
+            border: none;
+            cursor: pointer;
+            padding: 0;
+        }
+        .history-actions button.del { color: #f87171; }
+        .history-actions a:hover, .history-actions button:hover { text-decoration: underline; }
+    </style>
+</head>
+<body>
+    <div id="app" class="container">
+        <!-- Status Bar -->
+        <div v-if="userInfo" class="status-bar" :class="statusClass">
+            <span>
+                <span class="status-dot"></span>
+                {{ statusText }}
+            </span>
+            <a v-if="userInfo && !userInfo.logged_in && userInfo.name === null" href="/.auth/login/aad" class="login-link">登录</a>
+        </div>
+
+        <h1>🎨 GPT Image Generator</h1>
+
+        <div class="form-section">
+            <div class="form-group">
+                <label>Prompt（图像描述）</label>
+                <textarea v-model="prompt" placeholder="请输入图像生成/编辑描述..."></textarea>
+            </div>
+
+            <div class="upload-section">
+                <label>参考图片（上传后自动切换为编辑模式）</label>
+                <div class="upload-area">
+                    <input type="file" multiple accept="image/*" @change="onFileSelect">
+                    <div class="hint" v-if="!uploadFiles.length">点击或拖拽上传图片（支持多张）</div>
+                </div>
+                <div class="upload-previews" v-if="uploadFiles.length">
+                    <div class="upload-thumb" v-for="(f, i) in uploadPreviews" :key="i"
+                         draggable="true"
+                         @dragstart="dragStart(i, $event)"
+                         @dragover.prevent="dragOver(i, $event)"
+                         @dragleave="dragLeave($event)"
+                         @drop="drop(i, $event)"
+                         @dragend="dragEnd">
+                        <img :src="f">
+                        <span style="position:absolute;bottom:2px;left:4px;font-size:10px;color:#a78bfa;text-shadow:0 0 3px #000;">{{ i+1 }}</span>
+                        <button class="remove" @click="removeFile(i)">×</button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="options-row">
+                <div class="form-group">
+                    <label>尺寸</label>
+                    <select v-model="size">
+                        <option value="1024x1024">1024×1024</option>
+                        <option value="1280x720">1280×720（HD横版）</option>
+                        <option value="1536x1024">1536×1024（3:2横版）</option>
+                        <option value="2560x1440">2560×1440（2K横版）</option>
+                        <option value="1024x1536">1024×1536（竖版）</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>质量</label>
+                    <select v-model="quality">
+                        <option value="auto">Auto</option>
+                        <option value="low">Low</option>
+                        <option value="medium">Medium</option>
+                        <option value="high">High</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>数量</label>
+                    <select v-model.number="n">
+                        <option :value="1">1</option>
+                        <option :value="2">2</option>
+                        <option :value="3">3</option>
+                        <option :value="4">4</option>
+                    </select>
+                </div>
+            </div>
+
+            <button class="btn" @click="generate" :disabled="loading || !prompt.trim()">
+                <template v-if="loading">处理中...</template>
+                <template v-else>
+                    {{ isEditMode ? '编辑图像' : '生成图像' }}
+                    <span class="mode-tag" :class="isEditMode ? 'edit' : 'generate'">{{ isEditMode ? 'Edit' : 'Generate' }}</span>
+                </template>
+            </button>
+        </div>
+
+        <div class="result-section">
+            <div v-if="loading" class="loading">正在生成图像，请稍候</div>
+            <div v-if="error" class="error">{{ error }}</div>
+            <div v-if="images.length" class="image-grid">
+                <div class="image-card" v-for="(url, i) in images" :key="i">
+                    <img :src="url" :alt="'Generated image ' + (i+1)" @click="previewImg(url)" style="cursor:pointer;">
+                    <div class="image-actions">
+                        <a href="#" @click.prevent="download(url, i)">下载图片</a>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- History -->
+        <div class="history-section">
+            <div class="history-header">
+                <h2>📋 历史记录</h2>
+                <button class="history-toggle" @click="showHistory = !showHistory">
+                    {{ showHistory ? '收起' : '展开' }} ({{ history.length }})
+                </button>
+            </div>
+            <div v-if="showHistory">
+                <div v-if="!history.length" style="color:#666; font-size:0.9rem;">暂无历史记录</div>
+                <div class="history-item" v-for="item in history" :key="item.id">
+                    <div class="history-meta">
+                        <span>{{ formatTime(item.time) }} <span class="mode-tag" :class="item.type === 'edit' ? 'edit' : 'generate'">{{ item.type === 'edit' ? 'Edit' : 'Generate' }}</span></span>
+                        <span class="params">{{ item.size }} · {{ item.quality }} · ×{{ item.n }}</span>
+                    </div>
+                    <div class="history-prompt" @click="fillPrompt(item.prompt)" title="点击回填到输入框">
+                        {{ item.prompt }}
+                    </div>
+                    <div class="history-thumbs">
+                        <div v-for="f in item.files" :key="f" style="position:relative;display:inline-block;">
+                            <img :src="'/output/' + f" @click="previewImg('/output/' + f)">
+                            <button class="use-as-ref" @click="addAsReference('/output/' + f, f)" title="添加为参考图">+</button>
+                        </div>
+                    </div>
+                    <div class="history-actions">
+                        <button class="del" @click="deleteRecord(item.id)">删除</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Image Preview Modal -->
+        <div v-if="previewSrc" style="position:fixed;inset:0;background:rgba(0,0,0,0.85);display:flex;align-items:center;justify-content:center;z-index:999;cursor:pointer;" @click="previewSrc=''">
+            <img :src="previewSrc" style="max-width:90vw;max-height:90vh;border-radius:8px;">
+        </div>
+
+        <!-- Floating back-to-top button -->
+        <button class="fab-top" :class="{ visible: showFab }" @click="scrollToTop">↑</button>
+    </div>
+
+    <script>
+        const { createApp, ref } = Vue;
+
+        createApp({
+            setup() {
+                const prompt = ref('');
+                const size = ref('1024x1024');
+                const quality = ref('auto');
+                const n = ref(1);
+                const loading = ref(false);
+                const error = ref('');
+                const images = ref([]);
+                const history = ref([]);
+                const showHistory = ref(true);
+                const previewSrc = ref('');
+                const uploadFiles = ref([]);
+                const uploadPreviews = ref([]);
+                const isEditMode = Vue.computed(() => uploadFiles.value.length > 0);
+
+                // User info
+                const userInfo = ref(null);
+                const statusClass = Vue.computed(() => {
+                    if (!userInfo.value) return '';
+                    if (userInfo.value.name === 'local') return 'local';
+                    if (userInfo.value.logged_in) return 'logged-in';
+                    return 'anonymous';
+                });
+                const statusText = Vue.computed(() => {
+                    if (!userInfo.value) return '';
+                    if (userInfo.value.name === 'local') return '🖥️ 本地模式';
+                    if (userInfo.value.logged_in) return `👤 ${userInfo.value.name}`;
+                    return '⚠️ 未登录 · 历史记录不可用';
+                });
+                async function loadUser() {
+                    try {
+                        const res = await fetch('/api/user');
+                        if (res.ok) userInfo.value = await res.json();
+                    } catch (e) {}
+                }
+                loadUser();
+
+                // Floating button scroll detection
+                const showFab = ref(false);
+                function onScroll() {
+                    showFab.value = window.scrollY > 400;
+                }
+                window.addEventListener('scroll', onScroll, { passive: true });
+                function scrollToTop() {
+                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                }
+
+                function onFileSelect(e) {
+                    const files = Array.from(e.target.files);
+                    for (const f of files) {
+                        uploadFiles.value.push(f);
+                        const reader = new FileReader();
+                        reader.onload = (ev) => uploadPreviews.value.push(ev.target.result);
+                        reader.readAsDataURL(f);
+                    }
+                    e.target.value = '';
+                }
+
+                function removeFile(index) {
+                    uploadFiles.value.splice(index, 1);
+                    uploadPreviews.value.splice(index, 1);
+                }
+
+                // Drag and drop reordering
+                let dragIndex = null;
+
+                function dragStart(index, e) {
+                    dragIndex = index;
+                    e.target.closest('.upload-thumb').classList.add('dragging');
+                    e.dataTransfer.effectAllowed = 'move';
+                }
+
+                function dragOver(index, e) {
+                    if (dragIndex === null || dragIndex === index) return;
+                    e.target.closest('.upload-thumb').classList.add('drag-over');
+                }
+
+                function dragLeave(e) {
+                    e.target.closest('.upload-thumb')?.classList.remove('drag-over');
+                }
+
+                function drop(index, e) {
+                    e.target.closest('.upload-thumb')?.classList.remove('drag-over');
+                    if (dragIndex === null || dragIndex === index) return;
+                    // Swap files
+                    const f = uploadFiles.value.splice(dragIndex, 1)[0];
+                    uploadFiles.value.splice(index, 0, f);
+                    const p = uploadPreviews.value.splice(dragIndex, 1)[0];
+                    uploadPreviews.value.splice(index, 0, p);
+                    dragIndex = null;
+                }
+
+                function dragEnd() {
+                    dragIndex = null;
+                    document.querySelectorAll('.upload-thumb').forEach(el => {
+                        el.classList.remove('dragging', 'drag-over');
+                    });
+                }
+
+                // Load history on start
+                async function loadHistory() {
+                    try {
+                        const res = await fetch('/api/history');
+                        if (res.ok) history.value = await res.json();
+                    } catch (e) {}
+                }
+                loadHistory();
+
+                async function generate() {
+                    loading.value = true;
+                    error.value = '';
+                    images.value = [];
+
+                    try {
+                        let res;
+                        if (isEditMode.value) {
+                            // Edit mode: use FormData with uploaded images
+                            const formData = new FormData();
+                            formData.append('prompt', prompt.value);
+                            formData.append('size', size.value);
+                            formData.append('quality', quality.value);
+                            formData.append('n', n.value);
+                            for (const f of uploadFiles.value) {
+                                formData.append('images', f);
+                            }
+                            res = await fetch('/api/edit', { method: 'POST', body: formData });
+                        } else {
+                            // Generate mode
+                            res = await fetch('/api/generate', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({
+                                    prompt: prompt.value,
+                                    size: size.value,
+                                    quality: quality.value,
+                                    n: n.value,
+                                }),
+                            });
+                        }
+                        if (!res.ok) {
+                            const data = await res.json().catch(() => ({}));
+                            const detail = data.detail;
+                            if (detail && typeof detail === 'object' && detail.raw) {
+                                const raw = detail.raw;
+                                const msg = raw?.error?.message || detail.message || '请求失败';
+                                const code = raw?.error?.code || '';
+                                const type = raw?.error?.type || '';
+                                error.value = `❌ ${msg}\n\nCode: ${code}\nType: ${type}\n\n--- Raw API Response ---\n${JSON.stringify(raw, null, 2)}`;
+                            } else if (typeof detail === 'string') {
+                                error.value = detail;
+                            } else {
+                                error.value = JSON.stringify(detail || data, null, 2);
+                            }
+                            return;
+                        }
+                        const data = await res.json();
+                        images.value = data.images;
+                        loadHistory();
+                    } catch (e) {
+                        if (!error.value) error.value = e.message;
+                    } finally {
+                        loading.value = false;
+                    }
+                }
+
+                function download(url, index) {
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `generated_image_${index + 1}.png`;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                }
+
+                function fillPrompt(text) {
+                    prompt.value = text;
+                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                }
+
+                function previewImg(src) {
+                    previewSrc.value = src;
+                }
+
+                function editRecord(item) {
+                    // Add all images from this record as references
+                    for (const f of item.files) {
+                        addAsReference('/output/' + f, f);
+                    }
+                    fillPrompt(item.prompt);
+                }
+
+                async function addAsReference(url, filename) {
+                    try {
+                        const res = await fetch(url);
+                        const blob = await res.blob();
+                        const ext = filename.split('.').pop().toLowerCase();
+                        const mime = ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : 'image/jpeg';
+                        const file = new File([blob], filename, { type: mime });
+                        uploadFiles.value.push(file);
+                        uploadPreviews.value.push(url);
+                        window.scrollTo({ top: 0, behavior: 'smooth' });
+                    } catch (e) {
+                        console.error('Failed to add reference image:', e);
+                    }
+                }
+
+                async function deleteRecord(id) {
+                    if (!confirm('确认删除该记录及图片？')) return;
+                    try {
+                        await fetch(`/api/history/${id}`, { method: 'DELETE' });
+                        loadHistory();
+                    } catch (e) {}
+                }
+
+                function formatTime(iso) {
+                    const d = new Date(iso);
+                    return d.toLocaleString('zh-CN');
+                }
+
+                return { prompt, size, quality, n, loading, error, images, history, showHistory, previewSrc, showFab, uploadFiles, uploadPreviews, isEditMode, userInfo, statusClass, statusText, onFileSelect, removeFile, dragStart, dragOver, dragLeave, drop, dragEnd, scrollToTop, generate, download, fillPrompt, previewImg, editRecord, addAsReference, deleteRecord, formatTime };
+            }
+        }).mount('#app');
+    </script>
+</body>
+</html>
