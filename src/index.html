@@ -428,15 +428,17 @@
                 </div>
                 <div class="upload-previews" v-if="uploadFiles.length">
                     <div class="upload-thumb" v-for="(f, i) in uploadPreviews" :key="i"
-                         draggable="true"
+                         :draggable="dragReady"
+                         @mousedown="thumbMouseDown(i, $event)"
+                         @mouseup="thumbMouseUp(i, f, $event)"
                          @dragstart="dragStart(i, $event)"
                          @dragover.prevent="dragOver(i, $event)"
                          @dragleave="dragLeave($event)"
                          @drop="drop(i, $event)"
                          @dragend="dragEnd">
-                        <img :src="f" @dblclick.stop="previewImg(f)" title="双击放大">
+                        <img :src="f" title="点击放大 · 长按拖拽排序">
                         <span style="position:absolute;bottom:2px;left:4px;font-size:10px;color:#a78bfa;text-shadow:0 0 3px #000;">{{ i+1 }}</span>
-                        <button class="remove" @click="removeFile(i)">×</button>
+                        <button class="remove" @click.stop="removeFile(i)">×</button>
                     </div>
                 </div>
             </div>
@@ -601,8 +603,29 @@
                     uploadPreviews.value.splice(index, 1);
                 }
 
-                // Drag and drop reordering
+                // Drag and drop reordering with click-to-preview
                 let dragIndex = null;
+                const dragReady = ref(false);
+                let _thumbTimer = null;
+                let _thumbDragged = false;
+
+                function thumbMouseDown(i, e) {
+                    if (e.button !== 0) return;
+                    _thumbDragged = false;
+                    _thumbTimer = setTimeout(() => {
+                        dragReady.value = true;
+                        _thumbDragged = true;
+                    }, 150);
+                }
+
+                function thumbMouseUp(i, f, e) {
+                    clearTimeout(_thumbTimer);
+                    if (!_thumbDragged) {
+                        dragReady.value = false;
+                        previewImg(f);
+                    }
+                    setTimeout(() => { dragReady.value = false; }, 0);
+                }
 
                 function dragStart(index, e) {
                     dragIndex = index;
@@ -786,7 +809,7 @@
                     return d.toLocaleString('zh-CN');
                 }
 
-                return { prompt, size, quality, n, loading, error, images, history, showHistory, previewSrc, showFab, uploadFiles, uploadPreviews, isEditMode, userInfo, statusClass, statusText, onFileSelect, removeFile, dragStart, dragOver, dragLeave, drop, dragEnd, scrollToTop, generate, download, fillPrompt, previewImg, editRecord, addAsReference, deleteRecord, formatTime };  
+                return { prompt, size, quality, n, loading, error, images, history, showHistory, previewSrc, showFab, uploadFiles, uploadPreviews, isEditMode, userInfo, statusClass, statusText, dragReady, thumbMouseDown, thumbMouseUp, onFileSelect, removeFile, dragStart, dragOver, dragLeave, drop, dragEnd, scrollToTop, generate, download, fillPrompt, previewImg, editRecord, addAsReference, deleteRecord, formatTime };
             }
         }).mount('#app');
     </script>
