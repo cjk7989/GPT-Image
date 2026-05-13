@@ -405,6 +405,7 @@
                 {{ statusText }}
             </span>
             <a v-if="userInfo && !userInfo.logged_in && userInfo.name === null" href="/.auth/login/aad" class="login-link">登录</a>
+            <a v-if="userInfo && userInfo.logged_in && userInfo.name !== 'local'" href="/.auth/logout" class="login-link">登出</a>
         </div>
 
         <h1>🎨 GPT Image Generator</h1>
@@ -752,7 +753,7 @@
                     return d.toLocaleString('zh-CN');
                 }
 
-                return { prompt, size, quality, n, loading, error, images, history, showHistory, previewSrc, showFab, uploadFiles, uploadPreviews, isEditMode, userInfo, statusClass, statusText, onFileSelect, removeFile, dragStart, dragOver, dragLeave, drop, dragEnd, scrollToTop, generate, download, fillPrompt, previewImg, editRecord, addAsReference, deleteRecord, formatTime };
+                return { prompt, size, quality, n, loading, error, images, history, showHistory, previewSrc, showFab, uploadFiles, uploadPreviews, isEditMode, userInfo, statusClass, statusText, onFileSelect, removeFile, dragStart, dragOver, dragLeave, drop, dragEnd, scrollToTop, generate, download, fillPrompt, previewImg, editRecord, addAsReference, deleteRecord, formatTime };  
             }
         }).mount('#app');
     </script>
