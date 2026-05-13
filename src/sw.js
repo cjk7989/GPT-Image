@@ -1,4 +1,4 @@
-const CACHE_NAME = 'gpt-image-v1';
+const CACHE_NAME = 'gpt-image-__BUILD_VERSION__';
 const STATIC_ASSETS = [
   '/',
   '/favicon.ico',
@@ -24,12 +24,23 @@ self.addEventListener('activate', (event) => {
 
 self.addEventListener('fetch', (event) => {
   const { request } = event;
-  // API requests: network only
+  // API and output: network only
   if (request.url.includes('/api/') || request.url.includes('/output/')) {
     event.respondWith(fetch(request));
     return;
   }
-  // Static assets: cache first, fallback to network
+  // Navigation (HTML pages): network first, fallback to cache
+  if (request.mode === 'navigate') {
+    event.respondWith(
+      fetch(request).then((response) => {
+        const clone = response.clone();
+        caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
+        return response;
+      }).catch(() => caches.match(request))
+    );
+    return;
+  }
+  // Other static assets (JS, icons): cache first, fallback to network
   event.respondWith(
     caches.match(request).then((cached) => {
       return cached || fetch(request).then((response) => {

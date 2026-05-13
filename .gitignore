@@ -1,6 +1,8 @@
 .env
 __pycache__/
 *.pyc
+*.zip
 .venv/
 output/
 workspace/
+src/version.txt

@@ -3,12 +3,14 @@ import json
 import base64
 import traceback
 import gc
+import zipfile
+import io
 from datetime import datetime
 from pathlib import Path
 import hashlib
 from fastapi import FastAPI, HTTPException, Request, UploadFile, File, Form
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.responses import HTMLResponse, FileResponse, StreamingResponse
 from pydantic import BaseModel
 from openai import AzureOpenAI, APIStatusError
 from dotenv import load_dotenv
@@ -64,6 +66,30 @@ def _load_history(user: str) -> list:
 
 def _save_history(user: str, history: list):
     _history_file(user).write_text(json.dumps(history, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+# ── Favorites helpers ──
+
+def _fav_file(user: str, kind: str) -> Path:
+    """kind = 'prompt' or 'image'"""
+    return _user_dir(user) / f"{kind}_favorites.json"
+
+
+def _default_collection():
+    return {"id": datetime.now().strftime("%Y%m%d%H%M%S%f"), "name": "默认", "items": []}
+
+
+def _load_fav(user: str, kind: str) -> list:
+    f = _fav_file(user, kind)
+    if f.exists():
+        data = json.loads(f.read_text(encoding="utf-8"))
+        if data:
+            return data
+    return [_default_collection()]
+
+
+def _save_fav(user: str, kind: str, data: list):
+    _fav_file(user, kind).write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 class ImageRequest(BaseModel):
@@ -236,6 +262,36 @@ async def get_history(request: Request):
     return _load_history(user)
 
 
+def _fav_image_paths(user: str) -> set:
+    """Return set of file paths referenced by image favorites."""
+    paths = set()
+    for col in _load_fav(user, "image"):
+        for it in col.get("items", []):
+            if it.get("path"):
+                paths.add(it["path"])
+    return paths
+
+
+def _history_image_paths(user: str) -> set:
+    """Return set of file paths referenced by history."""
+    paths = set()
+    for r in _load_history(user):
+        paths.update(r.get("files", []))
+    return paths
+
+
+def _cleanup_orphan_files(user: str, file_paths: list[str]):
+    """Delete files that are no longer referenced by history or favorites."""
+    kept_by_fav = _fav_image_paths(user)
+    kept_by_hist = _history_image_paths(user)
+    protected = kept_by_fav | kept_by_hist
+    for f in file_paths:
+        if f not in protected:
+            fp = OUTPUT_DIR / f
+            if fp.exists():
+                fp.unlink()
+
+
 @app.delete("/api/history/{record_id}")
 async def delete_history(record_id: str, request: Request):
     user = _get_user(request)
@@ -245,25 +301,304 @@ async def delete_history(record_id: str, request: Request):
     record = next((r for r in history if r["id"] == record_id), None)
     if not record:
         raise HTTPException(status_code=404, detail="Record not found")
-    for f in record.get("files", []):
-        fp = OUTPUT_DIR / f
-        if fp.exists():
-            fp.unlink()
+    files_to_check = record.get("files", [])
     history = [r for r in history if r["id"] != record_id]
     _save_history(user, history)
+    _cleanup_orphan_files(user, files_to_check)
+    return {"ok": True}
+
+
+@app.delete("/api/history")
+async def clear_history(request: Request):
+    user = _get_user(request)
+    if not user:
+        raise HTTPException(status_code=403, detail="Login required")
+    history = _load_history(user)
+    all_files = []
+    for record in history:
+        all_files.extend(record.get("files", []))
+    _save_history(user, [])
+    _cleanup_orphan_files(user, all_files)
+    return {"ok": True, "deleted": len(history)}
+
+
+# ── Favorites API (prompt & image) ──
+
+def _require_user(request: Request) -> str:
+    user = _get_user(request)
+    if not user:
+        raise HTTPException(status_code=403, detail="Login required")
+    return user
+
+
+MAX_EXPORT_BYTES = 200 * 1024 * 1024  # 200 MB
+
+
+@app.get("/api/favorites/export")
+async def export_favorites(request: Request):
+    user = _require_user(request)
+    prompt_data = _load_fav(user, "prompt")
+    image_data = _load_fav(user, "image")
+
+    # Calculate total image size
+    total_size = 0
+    image_paths = []
+    for col in image_data:
+        for it in col.get("items", []):
+            p = OUTPUT_DIR / it["path"]
+            if p.exists():
+                total_size += p.stat().st_size
+                image_paths.append((it["path"], p))
+    if total_size > MAX_EXPORT_BYTES:
+        raise HTTPException(400, f"收藏图片总大小超过 {MAX_EXPORT_BYTES // 1024 // 1024}MB，请减少收藏后重试")
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("prompt_favorites.json", json.dumps(prompt_data, ensure_ascii=False, indent=2))
+        zf.writestr("image_favorites.json", json.dumps(image_data, ensure_ascii=False, indent=2))
+        seen = set()
+        for rel, full in image_paths:
+            fname = Path(rel).name
+            if fname not in seen:
+                zf.write(full, f"images/{fname}")
+                seen.add(fname)
+    buf.seek(0)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return StreamingResponse(
+        buf,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="favorites_{ts}.zip"'},
+    )
+
+
+@app.post("/api/favorites/import")
+async def import_favorites(request: Request, file: UploadFile = File(...)):
+    user = _require_user(request)
+    content = await file.read()
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(content))
+    except zipfile.BadZipFile:
+        raise HTTPException(400, "无效的 ZIP 文件")
+
+    stats = {"prompt_added": 0, "prompt_skipped": 0, "image_added": 0, "image_skipped": 0, "collections_created": 0}
+
+    # Import prompts
+    if "prompt_favorites.json" in zf.namelist():
+        imported = json.loads(zf.read("prompt_favorites.json"))
+        existing = _load_fav(user, "prompt")
+        existing_map = {c["name"]: c for c in existing}
+        for col in imported:
+            if col["name"] in existing_map:
+                target = existing_map[col["name"]]
+            else:
+                target = {"id": datetime.now().strftime("%Y%m%d%H%M%S%f"), "name": col["name"], "items": []}
+                existing.append(target)
+                existing_map[target["name"]] = target
+                stats["collections_created"] += 1
+            existing_set = {(i["prompt"], i.get("size", ""), i.get("quality", "")) for i in target["items"]}
+            for item in col.get("items", []):
+                key = (item["prompt"], item.get("size", ""), item.get("quality", ""))
+                if key in existing_set:
+                    stats["prompt_skipped"] += 1
+                else:
+                    item["id"] = datetime.now().strftime("%Y%m%d%H%M%S%f")
+                    target["items"].append(item)
+                    existing_set.add(key)
+                    stats["prompt_added"] += 1
+        _save_fav(user, "prompt", existing)
+
+    # Import images
+    if "image_favorites.json" in zf.namelist():
+        imported = json.loads(zf.read("image_favorites.json"))
+        existing = _load_fav(user, "image")
+        existing_map = {c["name"]: c for c in existing}
+        udir = _user_dir(user)
+        for col in imported:
+            if col["name"] in existing_map:
+                target = existing_map[col["name"]]
+            else:
+                target = {"id": datetime.now().strftime("%Y%m%d%H%M%S%f"), "name": col["name"], "items": []}
+                existing.append(target)
+                existing_map[target["name"]] = target
+                stats["collections_created"] += 1
+            existing_files = {Path(i["path"]).name for i in target["items"]}
+            for item in col.get("items", []):
+                fname = Path(item["path"]).name
+                if fname in existing_files:
+                    stats["image_skipped"] += 1
+                else:
+                    zip_path = f"images/{fname}"
+                    if zip_path in zf.namelist():
+                        dest = udir / fname
+                        dest.write_bytes(zf.read(zip_path))
+                        item["path"] = f"{user}/{fname}"
+                    item["id"] = datetime.now().strftime("%Y%m%d%H%M%S%f")
+                    target["items"].append(item)
+                    existing_files.add(fname)
+                    stats["image_added"] += 1
+        _save_fav(user, "image", existing)
+
+    zf.close()
+    return stats
+
+
+@app.delete("/api/favorites/clear/{kind}")
+async def clear_favorites(kind: str, request: Request):
+    if kind not in ("prompt", "image"):
+        raise HTTPException(400, "Invalid kind")
+    user = _require_user(request)
+    data = _load_fav(user, kind)
+    total_items = sum(len(c.get("items", [])) for c in data)
+    # Collect image paths before clearing
+    files_to_check = []
+    if kind == "image":
+        for col in data:
+            for it in col.get("items", []):
+                if it.get("path"):
+                    files_to_check.append(it["path"])
+    _save_fav(user, kind, [])
+    if files_to_check:
+        _cleanup_orphan_files(user, files_to_check)
+    return {"ok": True, "deleted_collections": len(data), "deleted_items": total_items}
+
+
+@app.get("/api/favorites/{kind}")
+async def get_favorites(kind: str, request: Request):
+    if kind not in ("prompt", "image"):
+        raise HTTPException(400, "Invalid kind")
+    user = _require_user(request)
+    return _load_fav(user, kind)
+
+
+@app.post("/api/favorites/{kind}/collection")
+async def create_collection(kind: str, request: Request):
+    if kind not in ("prompt", "image"):
+        raise HTTPException(400, "Invalid kind")
+    user = _require_user(request)
+    body = await request.json()
+    name = body.get("name", "").strip()
+    if not name:
+        raise HTTPException(400, "Name required")
+    data = _load_fav(user, kind)
+    if any(c["name"] == name for c in data):
+        raise HTTPException(409, "Collection name already exists")
+    col = {"id": datetime.now().strftime("%Y%m%d%H%M%S%f"), "name": name, "items": []}
+    data.append(col)
+    _save_fav(user, kind, data)
+    return col
+
+
+@app.put("/api/favorites/{kind}/collection/{col_id}")
+async def rename_collection(kind: str, col_id: str, request: Request):
+    if kind not in ("prompt", "image"):
+        raise HTTPException(400, "Invalid kind")
+    user = _require_user(request)
+    body = await request.json()
+    name = body.get("name", "").strip()
+    if not name:
+        raise HTTPException(400, "Name required")
+    data = _load_fav(user, kind)
+    col = next((c for c in data if c["id"] == col_id), None)
+    if not col:
+        raise HTTPException(404, "Collection not found")
+    if any(c["name"] == name and c["id"] != col_id for c in data):
+        raise HTTPException(409, "Collection name already exists")
+    col["name"] = name
+    _save_fav(user, kind, data)
+    return col
+
+
+@app.delete("/api/favorites/{kind}/collection/{col_id}")
+async def delete_collection(kind: str, col_id: str, request: Request):
+    if kind not in ("prompt", "image"):
+        raise HTTPException(400, "Invalid kind")
+    user = _require_user(request)
+    data = _load_fav(user, kind)
+    # Collect image paths from the collection being deleted
+    files_to_check = []
+    if kind == "image":
+        col = next((c for c in data if c["id"] == col_id), None)
+        if col:
+            files_to_check = [it["path"] for it in col.get("items", []) if it.get("path")]
+    data = [c for c in data if c["id"] != col_id]
+    if not data:
+        data = [_default_collection()]
+    _save_fav(user, kind, data)
+    if files_to_check:
+        _cleanup_orphan_files(user, files_to_check)
+    return {"ok": True}
+
+
+@app.post("/api/favorites/{kind}/item")
+async def add_favorite_item(kind: str, request: Request):
+    if kind not in ("prompt", "image"):
+        raise HTTPException(400, "Invalid kind")
+    user = _require_user(request)
+    body = await request.json()
+    col_ids = body.get("collection_ids", [])
+    data = _load_fav(user, kind)
+    item_id = datetime.now().strftime("%Y%m%d%H%M%S%f")
+    for col in data:
+        if col["id"] in col_ids:
+            if kind == "prompt":
+                item = {
+                    "id": item_id,
+                    "prompt": body.get("prompt", ""),
+                    "size": body.get("size", ""),
+                    "quality": body.get("quality", ""),
+                    "time": datetime.now().isoformat(),
+                }
+            else:
+                item = {
+                    "id": item_id,
+                    "path": body.get("path", ""),
+                    "prompt": body.get("prompt", ""),
+                    "time": datetime.now().isoformat(),
+                }
+            col["items"].insert(0, item)
+    _save_fav(user, kind, data)
+    return {"ok": True}
+
+
+@app.delete("/api/favorites/{kind}/item/{col_id}/{item_id}")
+async def delete_favorite_item(kind: str, col_id: str, item_id: str, request: Request):
+    if kind not in ("prompt", "image"):
+        raise HTTPException(400, "Invalid kind")
+    user = _require_user(request)
+    data = _load_fav(user, kind)
+    col = next((c for c in data if c["id"] == col_id), None)
+    if not col:
+        raise HTTPException(404, "Collection not found")
+    # Collect image path before removing
+    files_to_check = []
+    if kind == "image":
+        item = next((i for i in col["items"] if i["id"] == item_id), None)
+        if item and item.get("path"):
+            files_to_check.append(item["path"])
+    col["items"] = [i for i in col["items"] if i["id"] != item_id]
+    _save_fav(user, kind, data)
+    if files_to_check:
+        _cleanup_orphan_files(user, files_to_check)
     return {"ok": True}
 
 
 # Serve output images
 app.mount("/output", StaticFiles(directory=str(OUTPUT_DIR)), name="output")
 
-# Load index.html at startup
-_index_html = (BASE_DIR / "index.html").read_text(encoding="utf-8")
+# Build version for cache busting
+_version_file = BASE_DIR / "version.txt"
+BUILD_VERSION = _version_file.read_text().strip() if _version_file.exists() else datetime.now().strftime("%Y%m%d%H%M%S")
+
+# Load index.html at startup — inject version
+_index_html = (BASE_DIR / "index.html").read_text(encoding="utf-8").replace("__BUILD_VERSION__", BUILD_VERSION)
+
+# Load sw.js at startup — inject version
+_sw_js = (BASE_DIR / "sw.js").read_text(encoding="utf-8").replace("__BUILD_VERSION__", BUILD_VERSION)
 
 
 @app.get("/")
 async def index():
-    return HTMLResponse(_index_html)
+    return HTMLResponse(_index_html, headers={"Cache-Control": "no-cache, must-revalidate"})
 
 
 @app.get("/favicon.ico")
@@ -283,7 +618,8 @@ async def manifest():
 
 @app.get("/sw.js")
 async def service_worker():
-    return FileResponse(BASE_DIR / "sw.js", media_type="application/javascript")
+    from fastapi.responses import Response
+    return Response(_sw_js, media_type="application/javascript", headers={"Cache-Control": "no-cache, must-revalidate"})
 
 
 @app.get("/icon-192.png")

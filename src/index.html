@@ -300,11 +300,42 @@
             pointer-events: auto;
         }
         .fab-top:hover { box-shadow: 0 6px 24px rgba(167,139,250,0.5); }
+        .build-ver {
+            position: fixed;
+            bottom: 6px;
+            right: 10px;
+            font-size: 0.6rem;
+            color: rgba(255,255,255,0.15);
+            pointer-events: none;
+            z-index: 1;
+            user-select: none;
+        }
         @media (max-width: 600px) {
             .fab-top { bottom: 16px; right: 16px; width: 44px; height: 44px; font-size: 20px; }
         }
         .history-section {
             margin-top: 32px;
+        }
+        .section-tabs {
+            display: flex;
+            gap: 0;
+            margin-bottom: 16px;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+        }
+        .section-tabs button {
+            background: none;
+            border: none;
+            color: #888;
+            padding: 10px 18px;
+            font-size: 0.9rem;
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            transition: color 0.2s, border-color 0.2s;
+        }
+        .section-tabs button:hover { color: #c0c0c0; }
+        .section-tabs button.active {
+            color: #a78bfa;
+            border-bottom-color: #a78bfa;
         }
         .history-header {
             display: flex;
@@ -398,6 +429,75 @@
         }
         .history-actions button.del { color: #f87171; }
         .history-actions a:hover, .history-actions button:hover { text-decoration: underline; }
+        /* Favorites modal */
+        .fav-overlay {
+            position: fixed; inset: 0; background: rgba(0,0,0,0.7);
+            display: flex; align-items: center; justify-content: center; z-index: 998;
+        }
+        .fav-modal {
+            background: #1e293b; border: 1px solid rgba(255,255,255,0.15);
+            border-radius: 14px; padding: 24px; min-width: 320px; max-width: 90vw;
+        }
+        .fav-modal h3 { margin: 0 0 14px; font-size: 1rem; color: #a78bfa; }
+        .fav-modal label { display: flex; align-items: center; gap: 8px; padding: 6px 0; cursor: pointer; color: #d0d0d0; font-size: 0.9rem; }
+        .fav-modal input[type="checkbox"] { accent-color: #a78bfa; }
+        .fav-modal .new-col { display: flex; gap: 8px; margin-top: 12px; }
+        .fav-modal .new-col input {
+            flex: 1; padding: 6px 10px; border-radius: 6px;
+            border: 1px solid rgba(255,255,255,0.15); background: rgba(0,0,0,0.3);
+            color: #e0e0e0; font-size: 0.85rem;
+        }
+        .fav-modal .new-col button {
+            padding: 6px 14px; border-radius: 6px; border: none;
+            background: #a78bfa; color: #fff; font-size: 0.85rem; cursor: pointer;
+        }
+        .fav-modal .actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 16px; }
+        .fav-modal .actions button {
+            padding: 8px 18px; border-radius: 8px; border: none; font-size: 0.85rem; cursor: pointer;
+        }
+        .fav-modal .actions .cancel { background: rgba(255,255,255,0.1); color: #aaa; }
+        .fav-modal .actions .confirm { background: #a78bfa; color: #fff; }
+        /* Fav items */
+        .fav-collections { margin-top: 8px; }
+        .fav-col-header {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.06);
+        }
+        .fav-col-header h3 {
+            font-size: 0.95rem; color: #a78bfa; margin: 0; cursor: pointer;
+        }
+        .fav-col-header .col-actions { display: flex; gap: 8px; }
+        .fav-col-header .col-actions button {
+            background: none; border: none; font-size: 0.75rem; cursor: pointer; color: #888;
+        }
+        .fav-col-header .col-actions button:hover { color: #e0e0e0; }
+        .fav-item {
+            background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06);
+            border-radius: 8px; padding: 10px 12px; margin: 6px 0;
+        }
+        .fav-item-prompt { font-size: 0.85rem; color: #c0c0c0; cursor: pointer; line-height: 1.4; }
+        .fav-item-prompt:hover { color: #e0e0e0; }
+        .fav-item-meta { font-size: 0.75rem; color: #666; margin-top: 4px; }
+        .fav-item-actions { margin-top: 6px; }
+        .fav-item-actions button {
+            background: none; border: none; font-size: 0.8rem; color: #f87171; cursor: pointer; padding: 0;
+        }
+        .fav-item-actions button:hover { text-decoration: underline; }
+        .fav-img-grid {
+            display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0;
+        }
+        .fav-img-grid .fav-img-thumb {
+            position: relative; width: 80px; height: 80px;
+        }
+        .fav-img-thumb img {
+            width: 80px; height: 80px; object-fit: cover; border-radius: 6px;
+            border: 1px solid rgba(255,255,255,0.1); cursor: pointer;
+        }
+        .fav-img-thumb .fav-del {
+            position: absolute; top: -4px; right: -4px; width: 16px; height: 16px;
+            background: #f87171; color: #fff; border: none; border-radius: 50%;
+            font-size: 10px; line-height: 16px; text-align: center; cursor: pointer; padding: 0;
+        }
     </style>
 </head>
 <body>
@@ -428,15 +528,16 @@
                 </div>
                 <div class="upload-previews" v-if="uploadFiles.length">
                     <div class="upload-thumb" v-for="(f, i) in uploadPreviews" :key="i"
-                         :draggable="dragReady"
-                         @mousedown="thumbMouseDown(i, $event)"
-                         @mouseup="thumbMouseUp(i, f, $event)"
+                         :draggable="dragEnabled"
                          @dragstart="dragStart(i, $event)"
                          @dragover.prevent="dragOver(i, $event)"
                          @dragleave="dragLeave($event)"
                          @drop="drop(i, $event)"
-                         @dragend="dragEnd">
-                        <img :src="f" title="点击放大 · 长按拖拽排序">
+                         @dragend="dragEnd"
+                         @mousedown="thumbMouseDown(i, $event)"
+                         @mouseup="thumbMouseUp(i, f, $event)"
+                         @mouseleave="thumbMouseLeave">
+                        <img :src="f" title="点击放大 · 长按拖拽排序" style="cursor:pointer;">
                         <span style="position:absolute;bottom:2px;left:4px;font-size:10px;color:#a78bfa;text-shadow:0 0 3px #000;">{{ i+1 }}</span>
                         <button class="remove" @click.stop="removeFile(i)">×</button>
                     </div>
@@ -484,7 +585,7 @@
         </div>
 
         <div class="result-section">
-            <div v-if="loading" class="loading">正在生成图像，请稍候</div>
+            <div v-if="loading" class="loading">正在生成图像，完成后会有提示音，可以先忙别的~</div>
             <div v-if="error" class="error">{{ error }}</div>
             <div v-if="images.length" class="image-grid">
                 <div class="image-card" v-for="(url, i) in images" :key="i">
@@ -496,15 +597,23 @@
             </div>
         </div>
 
-        <!-- History -->
-        <div class="history-section">
-            <div class="history-header">
-                <h2>📋 历史记录</h2>
-                <button class="history-toggle" @click="showHistory = !showHistory">
-                    {{ showHistory ? '收起' : '展开' }} ({{ history.length }})
-                </button>
+        <!-- History & Favorites (hidden for anonymous) -->
+        <div class="history-section" v-if="canFav">
+            <!-- Tabs -->
+            <div class="section-tabs">
+                <button :class="{ active: activeTab === 'history' }" @click="activeTab='history'">📋 历史记录 ({{ history.length }})</button>
+                <button :class="{ active: activeTab === 'prompt-fav' }" @click="activeTab='prompt-fav'; loadFav('prompt')">⭐ Prompt 收藏</button>
+                <button :class="{ active: activeTab === 'image-fav' }" @click="activeTab='image-fav'; loadFav('image')">📌 图片收藏</button>
+                <span style="flex:1;"></span>
+                <button style="font-size:0.75rem;color:#888;border:none;background:none;cursor:pointer;" @click="exportFav" title="导出收藏">📤 导出</button>
+                <label style="font-size:0.75rem;color:#888;cursor:pointer;padding:10px 8px;">📥 导入<input type="file" accept=".zip" @change="importFav" style="display:none;"></label>
             </div>
-            <div v-if="showHistory">
+
+            <!-- History Tab -->
+            <div v-if="activeTab === 'history'">
+                <div v-if="history.length" style="text-align:right;margin-bottom:10px;">
+                    <button style="font-size:0.8rem;color:#f87171;background:none;border:1px solid rgba(248,113,113,0.3);padding:4px 12px;border-radius:6px;cursor:pointer;" @click="clearHistory">🗑️ 清空全部历史</button>
+                </div>
                 <div v-if="!history.length" style="color:#666; font-size:0.9rem;">暂无历史记录</div>
                 <div class="history-item" v-for="item in history" :key="item.id">
                     <div class="history-meta">
@@ -518,22 +627,104 @@
                         <div v-for="f in item.files" :key="f" style="position:relative;display:inline-block;">
                             <img :src="'/output/' + f" @click="previewImg('/output/' + f)">
                             <button class="use-as-ref" @click="addAsReference('/output/' + f, f)" title="添加为参考图">+</button>
+                            <button style="position:absolute;bottom:2px;left:2px;width:20px;height:20px;background:rgba(167,139,250,0.8);color:#fff;border:none;border-radius:50%;font-size:12px;line-height:20px;text-align:center;cursor:pointer;padding:0;" @click="openFavModal('image', item, f)" title="收藏图片">📌</button>
                         </div>
                     </div>
                     <div class="history-actions">
+                        <button @click="openFavModal('prompt', item)">⭐ 收藏 Prompt</button>
                         <button class="del" @click="deleteRecord(item.id)">删除</button>
                     </div>
+                </div>
+            </div>
+
+            <!-- Prompt Favorites Tab -->
+            <div v-if="activeTab === 'prompt-fav'">
+                <div v-if="promptFav.length" style="text-align:right;margin-bottom:10px;">
+                    <button style="font-size:0.8rem;color:#f87171;background:none;border:1px solid rgba(248,113,113,0.3);padding:4px 12px;border-radius:6px;cursor:pointer;" @click="clearFav('prompt')">🗑️ 清空全部 Prompt 收藏</button>
+                </div>
+                <div class="fav-collections" v-for="col in promptFav" :key="col.id">
+                    <div class="fav-col-header">
+                        <h3 @click="col._open = !col._open">{{ col._open === false ? '▶' : '▼' }} {{ col.name }} ({{ col.items.length }})</h3>
+                        <div class="col-actions">
+                            <button @click="renameCol('prompt', col)">重命名</button>
+                            <button @click="deleteCol('prompt', col.id)">删除夹</button>
+                        </div>
+                    </div>
+                    <div v-if="col._open !== false">
+                        <div v-if="!col.items.length" style="color:#555;font-size:0.8rem;padding:6px 0;">空</div>
+                        <div class="fav-item" v-for="it in col.items" :key="it.id">
+                            <div class="fav-item-prompt" @click="fillPromptWithParams(it)" title="点击回填 Prompt 及参数">{{ it.prompt }}</div>
+                            <div class="fav-item-meta">{{ it.size }} · {{ it.quality }} · {{ formatTime(it.time) }}</div>
+                            <div class="fav-item-actions">
+                                <button @click="delFavItem('prompt', col.id, it.id)">删除</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div style="margin-top:12px;">
+                    <button class="history-toggle" @click="openNewColDialog('prompt')">+ 新建收藏夹</button>
+                </div>
+            </div>
+
+            <!-- Image Favorites Tab -->
+            <div v-if="activeTab === 'image-fav'">
+                <div v-if="imageFav.length" style="text-align:right;margin-bottom:10px;">
+                    <button style="font-size:0.8rem;color:#f87171;background:none;border:1px solid rgba(248,113,113,0.3);padding:4px 12px;border-radius:6px;cursor:pointer;" @click="clearFav('image')">🗑️ 清空全部图片收藏</button>
+                </div>
+                <div class="fav-collections" v-for="col in imageFav" :key="col.id">
+                    <div class="fav-col-header">
+                        <h3 @click="col._open = !col._open">{{ col._open === false ? '▶' : '▼' }} {{ col.name }} ({{ col.items.length }})</h3>
+                        <div class="col-actions">
+                            <button @click="renameCol('image', col)">重命名</button>
+                            <button @click="deleteCol('image', col.id)">删除夹</button>
+                        </div>
+                    </div>
+                    <div v-if="col._open !== false">
+                        <div v-if="!col.items.length" style="color:#555;font-size:0.8rem;padding:6px 0;">空</div>
+                        <div class="fav-img-grid">
+                            <div class="fav-img-thumb" v-for="it in col.items" :key="it.id">
+                                <img :src="'/output/' + it.path" @click="previewFavImg(col, it)" :title="it.prompt">
+                                <button class="use-as-ref" @click="addAsReference('/output/' + it.path, it.path)" title="添加为参考图">+</button>
+                                <button class="fav-del" @click="delFavItem('image', col.id, it.id)">×</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div style="margin-top:12px;">
+                    <button class="history-toggle" @click="openNewColDialog('image')">+ 新建收藏夹</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Favorites Modal -->
+        <div class="fav-overlay" v-if="favModal.show" @click.self="favModal.show=false">
+            <div class="fav-modal">
+                <h3>{{ favModal.kind === 'prompt' ? '⭐ 收藏 Prompt' : '📌 收藏图片' }}</h3>
+                <div v-for="col in favModal.collections" :key="col.id">
+                    <label><input type="checkbox" v-model="col.checked"> {{ col.name }}</label>
+                </div>
+                <div class="new-col">
+                    <input v-model="favModal.newName" placeholder="新建收藏夹名称..." @keyup.enter="addColInModal">
+                    <button @click="addColInModal">创建</button>
+                </div>
+                <div class="actions">
+                    <button class="cancel" @click="favModal.show=false">取消</button>
+                    <button class="confirm" @click="confirmFav">确认收藏</button>
                 </div>
             </div>
         </div>
 
         <!-- Image Preview Modal -->
-        <div v-if="previewSrc" style="position:fixed;inset:0;background:rgba(0,0,0,0.85);display:flex;align-items:center;justify-content:center;z-index:999;cursor:pointer;" @click="previewSrc=''">
-            <img :src="previewSrc" style="max-width:90vw;max-height:90vh;border-radius:8px;">
+        <div v-if="previewSrc" style="position:fixed;inset:0;background:rgba(0,0,0,0.85);display:flex;align-items:center;justify-content:center;z-index:999;cursor:pointer;" @click="closePreview">
+            <div v-if="previewList.length > 1" style="position:absolute;left:16px;top:50%;transform:translateY(-50%);font-size:2.5rem;color:rgba(255,255,255,0.5);cursor:pointer;user-select:none;z-index:1000;" @click.stop="previewNav(-1)">‹</div>
+            <img :src="previewSrc" style="max-width:90vw;max-height:90vh;border-radius:8px;" @click.stop>
+            <div v-if="previewList.length > 1" style="position:absolute;right:16px;top:50%;transform:translateY(-50%);font-size:2.5rem;color:rgba(255,255,255,0.5);cursor:pointer;user-select:none;z-index:1000;" @click.stop="previewNav(1)">›</div>
+            <span v-if="previewList.length > 1" style="position:absolute;bottom:16px;left:50%;transform:translateX(-50%);color:rgba(255,255,255,0.4);font-size:0.8rem;user-select:none;">{{ previewIdx + 1 }} / {{ previewList.length }}　← → 切换</span>
         </div>
 
         <!-- Floating back-to-top button -->
         <button class="fab-top" :class="{ visible: showFab }" @click="scrollToTop">↑</button>
+        <span class="build-ver">v.__BUILD_VERSION__</span>
     </div>
 
     <script>
@@ -550,7 +741,13 @@
                 const images = ref([]);
                 const history = ref([]);
                 const showHistory = ref(true);
+                const activeTab = ref('history');
+                const promptFav = ref([]);
+                const imageFav = ref([]);
+                const favModal = ref({ show: false, kind: 'prompt', item: null, file: null, collections: [], newName: '' });
                 const previewSrc = ref('');
+                const previewList = ref([]);
+                const previewIdx = ref(0);
                 const uploadFiles = ref([]);
                 const uploadPreviews = ref([]);
                 const isEditMode = Vue.computed(() => uploadFiles.value.length > 0);
@@ -576,6 +773,12 @@
                     } catch (e) {}
                 }
                 loadUser();
+
+                // Only show tabs for local or logged-in users
+                const canFav = Vue.computed(() => {
+                    const u = userInfo.value;
+                    return u && (u.name === 'local' || u.logged_in);
+                });
 
                 // Floating button scroll detection
                 const showFab = ref(false);
@@ -603,28 +806,33 @@
                     uploadPreviews.value.splice(index, 1);
                 }
 
-                // Drag and drop reordering with click-to-preview
+                // Drag and drop reordering (long-press to enable drag, click to enlarge)
                 let dragIndex = null;
-                const dragReady = ref(false);
-                let _thumbTimer = null;
-                let _thumbDragged = false;
+                const dragEnabled = ref(false);
+                let holdTimer = null;
+                let didDrag = false;
 
-                function thumbMouseDown(i, e) {
+                function thumbMouseDown(index, e) {
                     if (e.button !== 0) return;
-                    _thumbDragged = false;
-                    _thumbTimer = setTimeout(() => {
-                        dragReady.value = true;
-                        _thumbDragged = true;
-                    }, 150);
+                    didDrag = false;
+                    holdTimer = setTimeout(() => {
+                        dragEnabled.value = true;
+                        didDrag = true;
+                    }, 300);
                 }
 
-                function thumbMouseUp(i, f, e) {
-                    clearTimeout(_thumbTimer);
-                    if (!_thumbDragged) {
-                        dragReady.value = false;
-                        previewImg(f);
+                function thumbMouseUp(index, src, e) {
+                    clearTimeout(holdTimer);
+                    if (!didDrag) {
+                        // Short click → enlarge
+                        previewImg(src);
                     }
-                    setTimeout(() => { dragReady.value = false; }, 0);
+                    // Reset after a tick so dragend can fire
+                    setTimeout(() => { dragEnabled.value = false; }, 0);
+                }
+
+                function thumbMouseLeave() {
+                    clearTimeout(holdTimer);
                 }
 
                 function dragStart(index, e) {
@@ -770,8 +978,38 @@
                 }
 
                 function previewImg(src) {
+                    previewList.value = [];
+                    previewIdx.value = 0;
                     previewSrc.value = src;
                 }
+
+                function previewFavImg(col, item) {
+                    const list = col.items.map(it => '/output/' + it.path);
+                    const idx = list.indexOf('/output/' + item.path);
+                    previewList.value = list;
+                    previewIdx.value = idx >= 0 ? idx : 0;
+                    previewSrc.value = list[previewIdx.value];
+                }
+
+                function previewNav(dir) {
+                    if (!previewList.value.length) return;
+                    const len = previewList.value.length;
+                    previewIdx.value = (previewIdx.value + dir + len) % len;
+                    previewSrc.value = previewList.value[previewIdx.value];
+                }
+
+                function closePreview() {
+                    previewSrc.value = '';
+                    previewList.value = [];
+                }
+
+                // Keyboard navigation for preview
+                window.addEventListener('keydown', (e) => {
+                    if (!previewSrc.value) return;
+                    if (e.key === 'ArrowLeft') { previewNav(-1); e.preventDefault(); }
+                    else if (e.key === 'ArrowRight') { previewNav(1); e.preventDefault(); }
+                    else if (e.key === 'Escape') { closePreview(); e.preventDefault(); }
+                });
 
                 function editRecord(item) {
                     // Add all images from this record as references
@@ -790,7 +1028,6 @@
                         const file = new File([blob], filename, { type: mime });
                         uploadFiles.value.push(file);
                         uploadPreviews.value.push(url);
-                        window.scrollTo({ top: 0, behavior: 'smooth' });
                     } catch (e) {
                         console.error('Failed to add reference image:', e);
                     }
@@ -804,18 +1041,194 @@
                     } catch (e) {}
                 }
 
+                async function clearHistory() {
+                    if (!confirm(`确认清空全部 ${history.value.length} 条历史记录及图片？此操作不可恢复！`)) return;
+                    try {
+                        const res = await fetch('/api/history', { method: 'DELETE' });
+                        if (res.ok) history.value = [];
+                    } catch (e) {}
+                }
+
+                async function clearFav(kind) {
+                    const label = kind === 'prompt' ? 'Prompt 收藏' : '图片收藏';
+                    const src = kind === 'prompt' ? promptFav : imageFav;
+                    const total = src.value.reduce((s, c) => s + c.items.length, 0);
+                    if (!confirm(`确认清空全部${label}？共 ${src.value.length} 个收藏夹、${total} 条内容，此操作不可恢复！`)) return;
+                    try {
+                        const res = await fetch(`/api/favorites/clear/${kind}`, { method: 'DELETE' });
+                        if (res.ok) src.value = [];
+                    } catch (e) {}
+                }
+
                 function formatTime(iso) {
                     const d = new Date(iso);
                     return d.toLocaleString('zh-CN');
                 }
 
-                return { prompt, size, quality, n, loading, error, images, history, showHistory, previewSrc, showFab, uploadFiles, uploadPreviews, isEditMode, userInfo, statusClass, statusText, dragReady, thumbMouseDown, thumbMouseUp, onFileSelect, removeFile, dragStart, dragOver, dragLeave, drop, dragEnd, scrollToTop, generate, download, fillPrompt, previewImg, editRecord, addAsReference, deleteRecord, formatTime };
+                // ── Favorites logic ──
+
+                async function loadFav(kind) {
+                    try {
+                        const res = await fetch(`/api/favorites/${kind}`);
+                        if (res.ok) {
+                            const data = await res.json();
+                            if (kind === 'prompt') promptFav.value = data;
+                            else imageFav.value = data;
+                        }
+                    } catch (e) {}
+                }
+
+                function openFavModal(kind, item, file) {
+                    const src = kind === 'prompt' ? promptFav : imageFav;
+                    // Load collections if not loaded yet
+                    if (!src.value.length) {
+                        loadFav(kind).then(() => _showModal(kind, item, file, src));
+                    } else {
+                        _showModal(kind, item, file, src);
+                    }
+                }
+
+                function _showModal(kind, item, file, src) {
+                    favModal.value = {
+                        show: true,
+                        kind,
+                        item,
+                        file: file || null,
+                        collections: src.value.map(c => ({ ...c, checked: src.value.length === 1 })),
+                        newName: '',
+                    };
+                }
+
+                async function addColInModal() {
+                    const name = favModal.value.newName.trim();
+                    if (!name) return;
+                    const kind = favModal.value.kind;
+                    try {
+                        const res = await fetch(`/api/favorites/${kind}/collection`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ name }),
+                        });
+                        if (res.status === 409) { alert('收藏夹名称已存在'); return; }
+                        if (res.ok) {
+                            const col = await res.json();
+                            favModal.value.collections.push({ ...col, checked: true });
+                            favModal.value.newName = '';
+                            await loadFav(kind);
+                        }
+                    } catch (e) {}
+                }
+
+                async function confirmFav() {
+                    const m = favModal.value;
+                    const checkedIds = m.collections.filter(c => c.checked).map(c => c.id);
+                    if (!checkedIds.length) { alert('请至少选择一个收藏夹'); return; }
+                    const body = { collection_ids: checkedIds };
+                    if (m.kind === 'prompt') {
+                        body.prompt = m.item.prompt;
+                        body.size = m.item.size;
+                        body.quality = m.item.quality;
+                    } else {
+                        body.path = m.file;
+                        body.prompt = m.item.prompt || '';
+                    }
+                    try {
+                        await fetch(`/api/favorites/${m.kind}/item`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(body),
+                        });
+                        await loadFav(m.kind);
+                        m.show = false;
+                    } catch (e) {}
+                }
+
+                async function delFavItem(kind, colId, itemId) {
+                    try {
+                        await fetch(`/api/favorites/${kind}/item/${colId}/${itemId}`, { method: 'DELETE' });
+                        await loadFav(kind);
+                    } catch (e) {}
+                }
+
+                async function renameCol(kind, col) {
+                    const name = window.prompt('重命名收藏夹', col.name);
+                    if (!name || name.trim() === col.name) return;
+                    try {
+                        const res = await fetch(`/api/favorites/${kind}/collection/${col.id}`, {
+                            method: 'PUT',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ name: name.trim() }),
+                        });
+                        if (res.status === 409) { alert('名称已存在'); return; }
+                        await loadFav(kind);
+                    } catch (e) {}
+                }
+
+                async function deleteCol(kind, colId) {
+                    if (!confirm('确认删除该收藏夹及其中所有条目？')) return;
+                    try {
+                        await fetch(`/api/favorites/${kind}/collection/${colId}`, { method: 'DELETE' });
+                        await loadFav(kind);
+                    } catch (e) {}
+                }
+
+                async function openNewColDialog(kind) {
+                    const name = window.prompt('新建收藏夹名称');
+                    if (!name || !name.trim()) return;
+                    try {
+                        const res = await fetch(`/api/favorites/${kind}/collection`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ name: name.trim() }),
+                        });
+                        if (res.status === 409) { alert('名称已存在'); return; }
+                        await loadFav(kind);
+                    } catch (e) {}
+                }
+
+                function fillPromptWithParams(item) {
+                    prompt.value = item.prompt;
+                    if (item.size) size.value = item.size;
+                    if (item.quality) quality.value = item.quality;
+                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                }
+
+                async function exportFav() {
+                    const a = document.createElement('a');
+                    a.href = '/api/favorites/export';
+                    a.download = 'favorites.zip';
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                }
+
+                async function importFav(e) {
+                    const file = e.target.files[0];
+                    if (!file) return;
+                    e.target.value = '';
+                    const formData = new FormData();
+                    formData.append('file', file);
+                    try {
+                        const res = await fetch('/api/favorites/import', { method: 'POST', body: formData });
+                        const data = await res.json();
+                        if (!res.ok) {
+                            alert(data.detail || '导入失败');
+                            return;
+                        }
+                        const msg = `导入完成：\n· 新增 ${data.prompt_added} 条 Prompt，跳过 ${data.prompt_skipped} 条重复\n· 新增 ${data.image_added} 张图片，跳过 ${data.image_skipped} 张重复\n· 新建 ${data.collections_created} 个收藏夹`;
+                        alert(msg);
+                        await loadFav('prompt');
+                        await loadFav('image');
+                    } catch (e) { alert('导入失败: ' + e.message); }
+                }
+
+                return { prompt, size, quality, n, loading, error, images, history, showHistory, activeTab, promptFav, imageFav, favModal, canFav, previewSrc, previewList, previewIdx, showFab, uploadFiles, uploadPreviews, isEditMode, userInfo, statusClass, statusText, dragEnabled, onFileSelect, removeFile, thumbMouseDown, thumbMouseUp, thumbMouseLeave, dragStart, dragOver, dragLeave, drop, dragEnd, scrollToTop, generate, download, fillPrompt, fillPromptWithParams, previewImg, previewFavImg, previewNav, closePreview, editRecord, addAsReference, deleteRecord, clearHistory, clearFav, formatTime, loadFav, openFavModal, addColInModal, confirmFav, delFavItem, renameCol, deleteCol, openNewColDialog, exportFav, importFav };
             }
         }).mount('#app');
     </script>
     <script>
         if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.register('/sw.js');
+            navigator.serviceWorker.register('/sw.js?v=__BUILD_VERSION__');
         }
     </script>
 </body>
