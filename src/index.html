@@ -5,6 +5,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>GPT Image Generator</title>
     <link rel="icon" href="/favicon.ico">
+    <link rel="manifest" href="/manifest.json">
+    <meta name="theme-color" content="#0f3460">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <link rel="apple-touch-icon" href="/favicon.png">
     <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -750,6 +755,11 @@
                 return { prompt, size, quality, n, loading, error, images, history, showHistory, previewSrc, showFab, uploadFiles, uploadPreviews, isEditMode, userInfo, statusClass, statusText, onFileSelect, removeFile, dragStart, dragOver, dragLeave, drop, dragEnd, scrollToTop, generate, download, fillPrompt, previewImg, editRecord, addAsReference, deleteRecord, formatTime };
             }
         }).mount('#app');
+    </script>
+    <script>
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('/sw.js');
+        }
     </script>
 </body>
 </html>

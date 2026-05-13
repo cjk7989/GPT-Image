@@ -267,3 +267,23 @@ async def favicon_ico():
 @app.get("/favicon.png")
 async def favicon_png():
     return FileResponse(BASE_DIR / "favicon.png", media_type="image/png")
+
+
+@app.get("/manifest.json")
+async def manifest():
+    return FileResponse(BASE_DIR / "manifest.json", media_type="application/manifest+json")
+
+
+@app.get("/sw.js")
+async def service_worker():
+    return FileResponse(BASE_DIR / "sw.js", media_type="application/javascript")
+
+
+@app.get("/icon-192.png")
+async def icon_192():
+    return FileResponse(BASE_DIR / "icon-192.png", media_type="image/png")
+
+
+@app.get("/icon-512.png")
+async def icon_512():
+    return FileResponse(BASE_DIR / "icon-512.png", media_type="image/png")
