@@ -318,9 +318,11 @@
         }
         .section-tabs {
             display: flex;
+            flex-wrap: wrap;
             gap: 0;
             margin-bottom: 16px;
             border-bottom: 1px solid rgba(255,255,255,0.1);
+            align-items: center;
         }
         .section-tabs button {
             background: none;
@@ -331,11 +333,16 @@
             cursor: pointer;
             border-bottom: 2px solid transparent;
             transition: color 0.2s, border-color 0.2s;
+            white-space: nowrap;
         }
         .section-tabs button:hover { color: #c0c0c0; }
         .section-tabs button.active {
             color: #a78bfa;
             border-bottom-color: #a78bfa;
+        }
+        @media (max-width: 600px) {
+            .section-tabs button { padding: 8px 10px; font-size: 0.78rem; }
+            .section-tabs .tab-action { font-size: 0.7rem !important; padding: 8px 6px !important; }
         }
         .history-header {
             display: flex;
@@ -585,7 +592,7 @@
         </div>
 
         <div class="result-section">
-            <div v-if="loading" class="loading">正在生成图像，完成后会有提示音，可以先忙别的~</div>
+            <div v-if="loading" class="loading">{{ loadingText }}</div>
             <div v-if="error" class="error">{{ error }}</div>
             <div v-if="images.length" class="image-grid">
                 <div class="image-card" v-for="(url, i) in images" :key="i">
@@ -605,8 +612,8 @@
                 <button :class="{ active: activeTab === 'prompt-fav' }" @click="activeTab='prompt-fav'; loadFav('prompt')">⭐ Prompt 收藏</button>
                 <button :class="{ active: activeTab === 'image-fav' }" @click="activeTab='image-fav'; loadFav('image')">📌 图片收藏</button>
                 <span style="flex:1;"></span>
-                <button style="font-size:0.75rem;color:#888;border:none;background:none;cursor:pointer;" @click="exportFav" title="导出收藏">📤 导出</button>
-                <label style="font-size:0.75rem;color:#888;cursor:pointer;padding:10px 8px;">📥 导入<input type="file" accept=".zip" @change="importFav" style="display:none;"></label>
+                <button class="tab-action" style="font-size:0.75rem;color:#888;border:none;background:none;cursor:pointer;" @click="exportFav" title="导出收藏">📤 导出</button>
+                <label class="tab-action" style="font-size:0.75rem;color:#888;cursor:pointer;padding:10px 8px;display:inline-flex;align-items:center;margin:0;">📥 导入<input type="file" accept=".zip" @change="importFav" style="display:none;"></label>
             </div>
 
             <!-- History Tab -->
@@ -675,6 +682,7 @@
                     <div class="fav-col-header">
                         <h3 @click="col._open = !col._open">{{ col._open === false ? '▶' : '▼' }} {{ col.name }} ({{ col.items.length }})</h3>
                         <div class="col-actions">
+                            <label style="font-size:0.75rem;cursor:pointer;color:#60a5fa;">上传<input type="file" multiple accept="image/*" @change="uploadToCol(col.id, $event)" style="display:none;"></label>
                             <button @click="renameCol('image', col)">重命名</button>
                             <button @click="deleteCol('image', col.id)">删除夹</button>
                         </div>
@@ -737,6 +745,7 @@
                 const quality = ref('auto');
                 const n = ref(1);
                 const loading = ref(false);
+                const loadingText = ref('');
                 const error = ref('');
                 const images = ref([]);
                 const history = ref([]);
@@ -877,15 +886,102 @@
                 }
                 loadHistory();
 
+                async function _watchTask(task_id, lastEventId = 0) {
+                    /**
+                     * Subscribe to SSE stream for a task with auto-reconnect.
+                     * Returns true if task succeeded (done), false if failed.
+                     */
+                    let finished = false;
+                    let succeeded = false;
+                    while (!finished) {
+                        try {
+                            const sseRes = await fetch(`/api/task/${task_id}?last_event_id=${lastEventId}`);
+                            if (sseRes.status === 404) {
+                                // Task expired or unknown — stop watching
+                                error.value = '❌ 任务已过期，请重新生成';
+                                finished = true;
+                                break;
+                            }
+                            if (!sseRes.ok) {
+                                error.value = `❌ 任务状态获取失败: ${sseRes.status}`;
+                                finished = true;
+                                break;
+                            }
+                            const reader = sseRes.body.getReader();
+                            const decoder = new TextDecoder();
+                            let buffer = '';
+
+                            while (true) {
+                                const { value, done: streamDone } = await reader.read();
+                                if (streamDone && !value) break;
+                                if (value) buffer += decoder.decode(value, { stream: true });
+
+                                const lines = buffer.split('\n');
+                                buffer = lines.pop();
+                                let currentEvent = '';
+                                let currentId = null;
+                                for (const line of lines) {
+                                    if (line.startsWith('id: ')) {
+                                        currentId = parseInt(line.slice(4).trim(), 10);
+                                    } else if (line.startsWith('event: ')) {
+                                        currentEvent = line.slice(7).trim();
+                                    } else if (line.startsWith('data: ')) {
+                                        const data = JSON.parse(line.slice(6));
+                                        if (currentId) lastEventId = currentId;
+                                        if (currentEvent === 'status') {
+                                            loadingText.value = data.message;
+                                        } else if (currentEvent === 'error') {
+                                            loadingText.value = `第 ${data.attempt} 次尝试失败，${data.wait}秒后重试...`;
+                                            console.error(`[Retry] attempt ${data.attempt} failed:`, data.status, data.message);
+                                        } else if (currentEvent === 'done') {
+                                            images.value = data.images;
+                                            loadHistory();
+                                            finished = true;
+                                            succeeded = true;
+                                        } else if (currentEvent === 'fail') {
+                                            const raw = data.raw;
+                                            if (raw) {
+                                                const msg = raw?.error?.message || data.message || '请求失败';
+                                                const code = raw?.error?.code || '';
+                                                const type = raw?.error?.type || '';
+                                                error.value = `❌ ${msg}\n\nCode: ${code}\nType: ${type}\n\n--- Raw API Response ---\n${JSON.stringify(raw, null, 2)}`;
+                                            } else {
+                                                error.value = `❌ ${data.message || '生成失败'}`;
+                                            }
+                                            console.error('[API Error]', data);
+                                            finished = true;
+                                        }
+                                        currentEvent = '';
+                                        currentId = null;
+                                    }
+                                }
+                                if (finished || streamDone) break;
+                            }
+                            reader.cancel().catch(() => {});
+                            if (!finished) {
+                                loadingText.value = '网络连接中断，正在重新连接...';
+                                console.log('[SSE] Connection lost, reconnecting with lastEventId:', lastEventId);
+                                await new Promise(r => setTimeout(r, 2000));
+                            }
+                        } catch (netErr) {
+                            loadingText.value = '网络连接中断，正在重新连接...';
+                            console.log('[SSE] Network error, reconnecting:', netErr.message);
+                            await new Promise(r => setTimeout(r, 2000));
+                        }
+                    }
+                    return succeeded;
+                }
+
                 async function generate() {
                     loading.value = true;
+                    loadingText.value = '正在生成图像，完成后会有提示音，可以先忙别的~';
                     error.value = '';
                     images.value = [];
 
                     try {
-                        let res;
+                        // Step 1: Submit task
+                        let taskRes;
                         if (isEditMode.value) {
-                            // Edit mode: use FormData with uploaded images
                             const formData = new FormData();
                             formData.append('prompt', prompt.value);
                             formData.append('size', size.value);
@@ -894,10 +990,9 @@
                             for (const f of uploadFiles.value) {
                                 formData.append('images', f);
                             }
-                            res = await fetch('/api/edit', { method: 'POST', body: formData });
+                            taskRes = await fetch('/api/edit', { method: 'POST', body: formData });
                         } else {
-                            // Generate mode
-                            res = await fetch('/api/generate', {
+                            taskRes = await fetch('/api/generate', {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
                                 body: JSON.stringify({
@@ -908,32 +1003,45 @@
                                 }),
                             });
                         }
-                        if (!res.ok) {
-                            const data = await res.json().catch(() => ({}));
-                            const detail = data.detail;
-                            if (detail && typeof detail === 'object' && detail.raw) {
-                                const raw = detail.raw;
-                                const msg = raw?.error?.message || detail.message || '请求失败';
-                                const code = raw?.error?.code || '';
-                                const type = raw?.error?.type || '';
-                                error.value = `❌ ${msg}\n\nCode: ${code}\nType: ${type}\n\n--- Raw API Response ---\n${JSON.stringify(raw, null, 2)}`;
-                            } else if (typeof detail === 'string') {
-                                error.value = detail;
-                            } else {
-                                error.value = JSON.stringify(detail || data, null, 2);
-                            }
+                        if (!taskRes.ok) {
+                            const body = await taskRes.text();
+                            error.value = `❌ 提交失败: ${body}`;
                             return;
                         }
-                        const data = await res.json();
-                        images.value = data.images;
-                        loadHistory();
+                        const { task_id } = await taskRes.json();
+
+                        // Save task_id so page refresh can resume
+                        localStorage.setItem('pending_task', task_id);
+
+                        // Step 2: Watch task
+                        await _watchTask(task_id);
                     } catch (e) {
                         if (!error.value) error.value = e.message;
                     } finally {
+                        localStorage.removeItem('pending_task');
                         loading.value = false;
                         playNotify(error.value ? 'error' : 'success');
                     }
                 }
+
+                // Resume pending task after page refresh
+                (async function resumePendingTask() {
+                    const pendingId = localStorage.getItem('pending_task');
+                    if (!pendingId) return;
+                    loading.value = true;
+                    loadingText.value = '正在恢复上次的生成任务...';
+                    error.value = '';
+                    images.value = [];
+                    try {
+                        await _watchTask(pendingId);
+                    } catch (e) {
+                        if (!error.value) error.value = e.message;
+                    } finally {
+                        localStorage.removeItem('pending_task');
+                        loading.value = false;
+                        playNotify(error.value ? 'error' : 'success');
+                    }
+                })();
 
                 function playNotify(type) {
                     try {
@@ -1186,6 +1294,25 @@
                     } catch (e) {}
                 }
 
+                async function uploadToCol(colId, e) {
+                    const files = Array.from(e.target.files);
+                    if (!files.length) return;
+                    e.target.value = '';
+                    const formData = new FormData();
+                    for (const f of files) formData.append('images', f);
+                    try {
+                        const res = await fetch(`/api/favorites/upload/${colId}`, { method: 'POST', body: formData });
+                        if (res.ok) {
+                            const data = await res.json();
+                            alert(`已上传 ${data.added} 张图片`);
+                            await loadFav('image');
+                        } else {
+                            const data = await res.json().catch(() => ({}));
+                            alert(data.detail || '上传失败');
+                        }
+                    } catch (e) { alert('上传失败: ' + e.message); }
+                }
+
                 function fillPromptWithParams(item) {
                     prompt.value = item.prompt;
                     if (item.size) size.value = item.size;
@@ -1222,7 +1349,7 @@
                     } catch (e) { alert('导入失败: ' + e.message); }
                 }
 
-                return { prompt, size, quality, n, loading, error, images, history, showHistory, activeTab, promptFav, imageFav, favModal, canFav, previewSrc, previewList, previewIdx, showFab, uploadFiles, uploadPreviews, isEditMode, userInfo, statusClass, statusText, dragEnabled, onFileSelect, removeFile, thumbMouseDown, thumbMouseUp, thumbMouseLeave, dragStart, dragOver, dragLeave, drop, dragEnd, scrollToTop, generate, download, fillPrompt, fillPromptWithParams, previewImg, previewFavImg, previewNav, closePreview, editRecord, addAsReference, deleteRecord, clearHistory, clearFav, formatTime, loadFav, openFavModal, addColInModal, confirmFav, delFavItem, renameCol, deleteCol, openNewColDialog, exportFav, importFav };
+                return { prompt, size, quality, n, loading, loadingText, error, images, history, showHistory, activeTab, promptFav, imageFav, favModal, canFav, previewSrc, previewList, previewIdx, showFab, uploadFiles, uploadPreviews, isEditMode, userInfo, statusClass, statusText, dragEnabled, onFileSelect, removeFile, thumbMouseDown, thumbMouseUp, thumbMouseLeave, dragStart, dragOver, dragLeave, drop, dragEnd, scrollToTop, generate, download, fillPrompt, fillPromptWithParams, previewImg, previewFavImg, previewNav, closePreview, editRecord, addAsReference, deleteRecord, clearHistory, clearFav, formatTime, loadFav, openFavModal, addColInModal, confirmFav, delFavItem, renameCol, deleteCol, openNewColDialog, uploadToCol, exportFav, importFav };
             }
         }).mount('#app');
     </script>

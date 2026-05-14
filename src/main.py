@@ -5,14 +5,18 @@ import traceback
 import gc
 import zipfile
 import io
+import uuid
+import threading
 from datetime import datetime
 from pathlib import Path
 import hashlib
+import time
+import concurrent.futures
 from fastapi import FastAPI, HTTPException, Request, UploadFile, File, Form
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, FileResponse, StreamingResponse
 from pydantic import BaseModel
-from openai import AzureOpenAI, APIStatusError
+from openai import AzureOpenAI, APIStatusError, APITimeoutError
 from dotenv import load_dotenv
 from typing import Optional
 
@@ -34,6 +38,7 @@ client = AzureOpenAI(
     api_version=api_version,
     azure_endpoint=endpoint,
     api_key=api_key,
+    timeout=300,
 )
 
 
@@ -55,6 +60,17 @@ def _user_dir(user: str) -> Path:
 
 def _history_file(user: str) -> Path:
     return _user_dir(user) / "history.json"
+
+
+_history_locks: dict[str, threading.Lock] = {}
+_history_locks_lock = threading.Lock()
+
+
+def _get_history_lock(user: str) -> threading.Lock:
+    with _history_locks_lock:
+        if user not in _history_locks:
+            _history_locks[user] = threading.Lock()
+        return _history_locks[user]
 
 
 def _load_history(user: str) -> list:
@@ -99,22 +115,121 @@ class ImageRequest(BaseModel):
     quality: str = "auto"
 
 
-@app.post("/api/generate")
-async def generate_image(req: ImageRequest, request: Request):
-    user = _get_user(request)
+MAX_RETRIES = 3
+
+
+def _is_retryable(e: APIStatusError) -> bool:
+    """Return True for transient errors worth retrying."""
+    return e.status_code in (400, 404, 429, 500, 502, 503, 504)
+
+
+def _sse_event(event: str, data: dict) -> str:
+    """Format a Server-Sent Event."""
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+SSE_KEEPALIVE = ": keepalive\n\n"
+KEEPALIVE_INTERVAL = 10  # seconds
+_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
+
+# ── Task management ──
+# Tasks run independently of SSE connections. Clients can reconnect at any time.
+
+_tasks: dict[str, dict] = {}  # task_id -> {status, events[], result, error, done}
+_tasks_lock = threading.Lock()
+_TASK_TTL = 600  # seconds to keep completed tasks
+
+
+def _task_emit(task_id: str, event: str, data: dict):
+    """Append an SSE event to a task's event log."""
+    with _tasks_lock:
+        t = _tasks.get(task_id)
+        if t:
+            t["events"].append((event, data))
+
+
+def _task_finish(task_id: str):
+    """Mark task as done so watchers know to stop."""
+    with _tasks_lock:
+        t = _tasks.get(task_id)
+        if t:
+            t["done"] = True
+            t["finished_at"] = time.time()
+
+
+def _cleanup_old_tasks():
+    """Remove tasks that finished more than _TASK_TTL seconds ago."""
+    now = time.time()
+    with _tasks_lock:
+        expired = [tid for tid, t in _tasks.items()
+                    if t.get("done") and now - t.get("finished_at", now) > _TASK_TTL]
+        for tid in expired:
+            del _tasks[tid]
+
+
+def _create_task() -> str:
+    _cleanup_old_tasks()
+    task_id = uuid.uuid4().hex[:12]
+    with _tasks_lock:
+        _tasks[task_id] = {"events": [], "done": False, "finished_at": None}
+    return task_id
+
+
+def _run_generate_task(task_id: str, user: str, req_prompt: str, req_n: int, req_size: str, req_quality: str):
+    """Run image generation in background thread, emitting events to task log."""
+    result = None
+    for attempt in range(1, MAX_RETRIES + 1):
+        if attempt > 1:
+            _task_emit(task_id, "status", {"message": f"正在生成图像（第 {attempt} 次尝试）..."})
+        else:
+            _task_emit(task_id, "status", {"message": "正在生成图像..."})
+        try:
+            result = client.images.generate(
+                model=deployment,
+                prompt=req_prompt,
+                n=req_n,
+                size=req_size,
+                quality=req_quality,
+                output_format="jpeg",
+            )
+            break
+        except APIStatusError as e:
+            try:
+                body = e.response.json()
+            except Exception:
+                body = e.response.text
+            print(f"[API Error] generate attempt {attempt}/{MAX_RETRIES} status={e.status_code} body={json.dumps(body, ensure_ascii=False, indent=2)}")
+            if _is_retryable(e) and attempt < MAX_RETRIES:
+                wait = 2 ** attempt
+                print(f"[Retry] retrying in {wait}s...")
+                _task_emit(task_id, "error", {"attempt": attempt, "status": e.status_code, "message": str(e.message), "wait": wait})
+                time.sleep(wait)
+                continue
+            _task_emit(task_id, "fail", {"message": str(e.message), "raw": body})
+            _task_finish(task_id)
+            return
+        except APITimeoutError as e:
+            print(f"[Timeout] generate attempt {attempt}/{MAX_RETRIES}: {e}")
+            if attempt < MAX_RETRIES:
+                wait = 2 ** attempt
+                print(f"[Retry] retrying in {wait}s...")
+                _task_emit(task_id, "error", {"attempt": attempt, "status": 0, "message": "请求超时", "wait": wait})
+                time.sleep(wait)
+                continue
+            _task_emit(task_id, "fail", {"message": "请求超时，请稍后重试"})
+            _task_finish(task_id)
+            return
+        except Exception as e:
+            traceback.print_exc()
+            _task_emit(task_id, "fail", {"message": str(e)})
+            _task_finish(task_id)
+            return
+
+    # Process result
     try:
-        result = client.images.generate(
-            model=deployment,
-            prompt=req.prompt,
-            n=req.n,
-            size=req.size,
-            quality=req.quality,
-            output_format="jpeg",
-        )
-        images = []
+        images_out = []
         saved_files = []
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        # Always save to file to avoid OOM; anonymous uses _anon dir
         adir = _user_dir(user) if user else _user_dir("_anon")
         prefix = f"{user}/" if user else "_anon/"
 
@@ -124,75 +239,88 @@ async def generate_image(req: ImageRequest, request: Request):
                 filename = f"{ts}_{idx+1}.jpg"
                 (adir / filename).write_bytes(base64.b64decode(b64))
                 saved_files.append(f"{prefix}{filename}")
-                images.append(f"/output/{prefix}{filename}")
+                images_out.append(f"/output/{prefix}{filename}")
             elif item.url:
-                images.append(item.url)
+                images_out.append(item.url)
 
-        # Clear API response from memory
         del result
         gc.collect()
 
-        # Record history
         if user and saved_files:
             record = {
                 "id": ts,
                 "time": datetime.now().isoformat(),
-                "prompt": req.prompt,
-                "size": req.size,
-                "quality": req.quality,
-                "n": req.n,
+                "prompt": req_prompt,
+                "size": req_size,
+                "quality": req_quality,
+                "n": req_n,
                 "files": saved_files,
             }
-            history = _load_history(user)
-            history.insert(0, record)
-            _save_history(user, history)
+            with _get_history_lock(user):
+                history = _load_history(user)
+                history.insert(0, record)
+                _save_history(user, history)
 
-        return {"images": images}
-    except APIStatusError as e:
-        # Return full API error details for debugging content filters
-        try:
-            body = e.response.json()
-        except Exception:
-            body = e.response.text
-        print(f"[API Error] status={e.status_code} body={json.dumps(body, ensure_ascii=False, indent=2)}")
-        raise HTTPException(status_code=e.status_code, detail={
-            "message": str(e.message),
-            "raw": body,
-        })
+        _task_emit(task_id, "done", {"images": images_out})
     except Exception as e:
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
+        _task_emit(task_id, "fail", {"message": str(e)})
+    _task_finish(task_id)
 
 
-@app.post("/api/edit")
-async def edit_image(
-    request: Request,
-    prompt: str = Form(...),
-    size: str = Form("1024x1024"),
-    quality: str = Form("auto"),
-    n: int = Form(1),
-    images: list[UploadFile] = File(...),
-):
-    user = _get_user(request)
+def _run_edit_task(task_id: str, user: str, req_prompt: str, req_n: int, req_size: str, req_quality: str,
+                   image_files: list, input_filenames: list):
+    """Run image editing in background thread, emitting events to task log."""
+    result = None
+    for attempt in range(1, MAX_RETRIES + 1):
+        if attempt > 1:
+            _task_emit(task_id, "status", {"message": f"正在编辑图像（第 {attempt} 次尝试）..."})
+        else:
+            _task_emit(task_id, "status", {"message": "正在编辑图像..."})
+        try:
+            result = client.images.edit(
+                model=deployment,
+                prompt=req_prompt,
+                image=image_files,
+                n=req_n,
+                size=req_size,
+                quality=req_quality,
+            )
+            break
+        except APIStatusError as e:
+            try:
+                body = e.response.json()
+            except Exception:
+                body = e.response.text
+            print(f"[API Error] edit attempt {attempt}/{MAX_RETRIES} status={e.status_code} body={json.dumps(body, ensure_ascii=False, indent=2)}")
+            if _is_retryable(e) and attempt < MAX_RETRIES:
+                wait = 2 ** attempt
+                print(f"[Retry] retrying in {wait}s...")
+                _task_emit(task_id, "error", {"attempt": attempt, "status": e.status_code, "message": str(e.message), "wait": wait})
+                time.sleep(wait)
+                continue
+            _task_emit(task_id, "fail", {"message": str(e.message), "raw": body})
+            _task_finish(task_id)
+            return
+        except APITimeoutError as e:
+            print(f"[Timeout] edit attempt {attempt}/{MAX_RETRIES}: {e}")
+            if attempt < MAX_RETRIES:
+                wait = 2 ** attempt
+                print(f"[Retry] retrying in {wait}s...")
+                _task_emit(task_id, "error", {"attempt": attempt, "status": 0, "message": "请求超时", "wait": wait})
+                time.sleep(wait)
+                continue
+            _task_emit(task_id, "fail", {"message": "请求超时，请稍后重试"})
+            _task_finish(task_id)
+            return
+        except Exception as e:
+            traceback.print_exc()
+            _task_emit(task_id, "fail", {"message": str(e)})
+            _task_finish(task_id)
+            return
+
     try:
-        # Read uploaded image files with mime types
-        image_files = []
-        for img in images:
-            content = await img.read()
-            content_type = img.content_type or "application/octet-stream"
-            image_files.append((img.filename, content, content_type))
-
-        result = client.images.edit(
-            model=deployment,
-            prompt=prompt,
-            image=image_files,
-            n=n,
-            size=size,
-            quality=quality,
-        )
-        # Free upload data
         del image_files
-
         result_images = []
         saved_files = []
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -209,41 +337,99 @@ async def edit_image(
             elif item.url:
                 result_images.append(item.url)
 
-        # Clear API response from memory
         del result
         gc.collect()
 
-        # Record history
         if user and saved_files:
             record = {
                 "id": ts,
                 "time": datetime.now().isoformat(),
-                "prompt": prompt,
-                "size": size,
-                "quality": quality,
-                "n": n,
+                "prompt": req_prompt,
+                "size": req_size,
+                "quality": req_quality,
+                "n": req_n,
                 "type": "edit",
-                "input_images": [img.filename for img in images],
+                "input_images": input_filenames,
                 "files": saved_files,
             }
-            history = _load_history(user)
-            history.insert(0, record)
-            _save_history(user, history)
+            with _get_history_lock(user):
+                history = _load_history(user)
+                history.insert(0, record)
+                _save_history(user, history)
 
-        return {"images": result_images}
-    except APIStatusError as e:
-        try:
-            body = e.response.json()
-        except Exception:
-            body = e.response.text
-        print(f"[API Error] status={e.status_code} body={json.dumps(body, ensure_ascii=False, indent=2)}")
-        raise HTTPException(status_code=e.status_code, detail={
-            "message": str(e.message),
-            "raw": body,
-        })
+        _task_emit(task_id, "done", {"images": result_images})
     except Exception as e:
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
+        _task_emit(task_id, "fail", {"message": str(e)})
+    _task_finish(task_id)
+
+
+@app.post("/api/generate")
+async def generate_image(req: ImageRequest, request: Request):
+    user = _get_user(request)
+    task_id = _create_task()
+    _executor.submit(_run_generate_task, task_id, user, req.prompt, req.n, req.size, req.quality)
+    return {"task_id": task_id}
+
+
+@app.post("/api/edit")
+async def edit_image(
+    request: Request,
+    prompt: str = Form(...),
+    size: str = Form("1024x1024"),
+    quality: str = Form("auto"),
+    n: int = Form(1),
+    images: list[UploadFile] = File(...),
+):
+    user = _get_user(request)
+    # Read uploaded image files eagerly
+    image_files = []
+    for img in images:
+        content = await img.read()
+        content_type = img.content_type or "application/octet-stream"
+        image_files.append((img.filename, content, content_type))
+    input_filenames = [img.filename for img in images]
+
+    task_id = _create_task()
+    _executor.submit(_run_edit_task, task_id, user, prompt, n, size, quality, image_files, input_filenames)
+    return {"task_id": task_id}
+
+
+@app.get("/api/task/{task_id}")
+async def task_stream(task_id: str, request: Request, last_event_id: int = 0):
+    """SSE stream for task progress. Supports reconnection via last_event_id query param."""
+    with _tasks_lock:
+        if task_id not in _tasks:
+            raise HTTPException(404, "Task not found")
+
+    def _stream():
+        cursor = last_event_id
+        while True:
+            with _tasks_lock:
+                t = _tasks.get(task_id)
+                if not t:
+                    return
+                events = t["events"]
+                done = t["done"]
+
+            # Replay any events after cursor
+            while cursor < len(events):
+                event_name, data = events[cursor]
+                cursor += 1
+                yield f"id: {cursor}\n{_sse_event(event_name, data)}"
+
+            if done:
+                return
+
+            # No new events yet — send keepalive and wait
+            yield SSE_KEEPALIVE
+            time.sleep(KEEPALIVE_INTERVAL)
+
+    return StreamingResponse(
+        _stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.get("/api/user")
@@ -460,6 +646,43 @@ async def clear_favorites(kind: str, request: Request):
     if files_to_check:
         _cleanup_orphan_files(user, files_to_check)
     return {"ok": True, "deleted_collections": len(data), "deleted_items": total_items}
+
+
+@app.post("/api/favorites/upload/{col_id}")
+async def upload_to_fav_collection(
+    col_id: str,
+    request: Request,
+    images: list[UploadFile] = File(...),
+):
+    user = _require_user(request)
+    data = _load_fav(user, "image")
+    col = next((c for c in data if c["id"] == col_id), None)
+    if not col:
+        raise HTTPException(404, "Collection not found")
+    user_dir = _user_dir(user)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    added = 0
+    for idx, img in enumerate(images):
+        content = await img.read()
+        ext = Path(img.filename).suffix.lower() if img.filename else ".jpg"
+        if ext not in (".jpg", ".jpeg", ".png", ".webp", ".gif"):
+            ext = ".jpg"
+        filename = f"fav_{ts}_{idx}_{img.filename or 'img'}"
+        # Sanitize filename
+        filename = filename.replace("/", "_").replace("\\", "_").replace("..", "_")
+        if not filename.lower().endswith(('.jpg', '.jpeg', '.png', '.webp', '.gif')):
+            filename += ext
+        (user_dir / filename).write_bytes(content)
+        item = {
+            "id": datetime.now().strftime("%Y%m%d%H%M%S%f") + str(idx),
+            "path": f"{user}/{filename}",
+            "prompt": "",
+            "time": datetime.now().isoformat(),
+        }
+        col["items"].insert(0, item)
+        added += 1
+    _save_fav(user, "image", data)
+    return {"ok": True, "added": added}
 
 
 @app.get("/api/favorites/{kind}")

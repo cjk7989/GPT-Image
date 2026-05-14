@@ -24,9 +24,8 @@ self.addEventListener('activate', (event) => {
 
 self.addEventListener('fetch', (event) => {
   const { request } = event;
-  // API and output: network only
+  // API and output: bypass service worker entirely
   if (request.url.includes('/api/') || request.url.includes('/output/')) {
-    event.respondWith(fetch(request));
     return;
   }
   // Navigation (HTML pages): network first, fallback to cache

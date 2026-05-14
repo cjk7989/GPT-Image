@@ -70,7 +70,7 @@ if %DEPLOY_ERR% neq 0 (
 :: Re-set startup command (deployment may clear it)
 echo.
 echo Setting startup command...
-call az webapp config set --resource-group %RG% --name %APP% --startup-file "gunicorn main:app --workers 2 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000 --timeout 300" >nul
+call az webapp config set --resource-group %RG% --name %APP% --startup-file "gunicorn main:app --workers 1 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000 --timeout 300" >nul
 
 echo Restarting app...
 call az webapp restart --resource-group %RG% --name %APP%
