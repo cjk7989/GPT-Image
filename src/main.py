@@ -483,13 +483,14 @@ async def delete_history(record_id: str, request: Request):
     user = _get_user(request)
     if not user:
         raise HTTPException(status_code=403, detail="Login required")
-    history = _load_history(user)
-    record = next((r for r in history if r["id"] == record_id), None)
-    if not record:
-        raise HTTPException(status_code=404, detail="Record not found")
-    files_to_check = record.get("files", [])
-    history = [r for r in history if r["id"] != record_id]
-    _save_history(user, history)
+    with _get_history_lock(user):
+        history = _load_history(user)
+        record = next((r for r in history if r["id"] == record_id), None)
+        if not record:
+            raise HTTPException(status_code=404, detail="Record not found")
+        files_to_check = record.get("files", [])
+        history = [r for r in history if r["id"] != record_id]
+        _save_history(user, history)
     _cleanup_orphan_files(user, files_to_check)
     return {"ok": True}
 
@@ -499,11 +500,12 @@ async def clear_history(request: Request):
     user = _get_user(request)
     if not user:
         raise HTTPException(status_code=403, detail="Login required")
-    history = _load_history(user)
-    all_files = []
-    for record in history:
-        all_files.extend(record.get("files", []))
-    _save_history(user, [])
+    with _get_history_lock(user):
+        history = _load_history(user)
+        all_files = []
+        for record in history:
+            all_files.extend(record.get("files", []))
+        _save_history(user, [])
     _cleanup_orphan_files(user, all_files)
     return {"ok": True, "deleted": len(history)}
 
