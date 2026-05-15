@@ -132,6 +132,15 @@
             background: linear-gradient(135deg, #a78bfa, #60a5fa);
             color: #fff;
             transition: opacity 0.2s;
+            position: relative;
+            text-align: center;
+        }
+        .btn .mode-tag {
+            position: absolute;
+            right: 14px;
+            top: 50%;
+            transform: translateY(-50%);
+            margin-left: 0;
         }
         .btn:hover { opacity: 0.9; }
         .btn:disabled {
@@ -546,7 +555,7 @@
                          @mouseleave="thumbMouseLeave">
                         <img :src="f" title="点击放大 · 长按拖拽排序" style="cursor:pointer;">
                         <span style="position:absolute;bottom:2px;left:4px;font-size:10px;color:#a78bfa;text-shadow:0 0 3px #000;">{{ i+1 }}</span>
-                        <button class="remove" @click.stop="removeFile(i)">×</button>
+                        <button class="remove" @click.stop="removeFile(i)" @mousedown.stop @mouseup.stop>×</button>
                     </div>
                 </div>
             </div>
@@ -556,10 +565,12 @@
                     <label>尺寸</label>
                     <select v-model="size">
                         <option value="1024x1024">1024×1024</option>
-                        <option value="1280x720">1280×720（HD横版）</option>
-                        <option value="1536x1024">1536×1024（3:2横版）</option>
+                        <option value="512x512">512×512（小方图）</option>
                         <option value="2560x1440">2560×1440（2K横版）</option>
-                        <option value="1024x1536">1024×1536（竖版）</option>
+                        <option value="1536x1024">1536×1024（3:2横版）</option>
+                        <option value="1280x720">1280×720（HD横版）</option>
+                        <option value="1024x1536">1024×1536（3:2竖版）</option>
+                        <option value="768x1024">768×1024（4:3竖版）</option>
                     </select>
                 </div>
                 <div class="form-group">
