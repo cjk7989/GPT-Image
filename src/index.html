@@ -662,7 +662,7 @@
                 </div>
                 <div class="fav-collections" v-for="col in promptFav" :key="col.id">
                     <div class="fav-col-header">
-                        <h3 @click="col._open = !col._open">{{ col._open === false ? '▶' : '▼' }} {{ col.name }} ({{ col.items.length }})</h3>
+                        <h3 @click="toggleCol(col)">{{ col._open === false ? '▶' : '▼' }} {{ col.name }} ({{ col.items.length }})</h3>
                         <div class="col-actions">
                             <button @click="renameCol('prompt', col)">重命名</button>
                             <button @click="deleteCol('prompt', col.id)">删除夹</button>
@@ -691,9 +691,9 @@
                 </div>
                 <div class="fav-collections" v-for="col in imageFav" :key="col.id">
                     <div class="fav-col-header">
-                        <h3 @click="col._open = !col._open">{{ col._open === false ? '▶' : '▼' }} {{ col.name }} ({{ col.items.length }})</h3>
+                        <h3 @click="toggleCol(col)">{{ col._open === false ? '▶' : '▼' }} {{ col.name }} ({{ col.items.length }})</h3>
                         <div class="col-actions">
-                            <label style="font-size:0.75rem;cursor:pointer;color:#60a5fa;">上传<input type="file" multiple accept="image/*" @change="uploadToCol(col.id, $event)" style="display:none;"></label>
+                            <button @click="$refs['uploadCol_' + col.id][0].click()">上传</button><input :ref="'uploadCol_' + col.id" type="file" multiple accept="image/*" @change="uploadToCol(col.id, $event)" style="display:none;">
                             <button @click="renameCol('image', col)">重命名</button>
                             <button @click="deleteCol('image', col.id)">删除夹</button>
                         </div>
@@ -713,6 +713,7 @@
                     <button class="history-toggle" @click="openNewColDialog('image')">+ 新建收藏夹</button>
                 </div>
             </div>
+
         </div>
 
         <!-- Favorites Modal -->
@@ -1186,11 +1187,31 @@
 
                 // ── Favorites logic ──
 
+                function _getFoldState() {
+                    try { return JSON.parse(localStorage.getItem('fav_fold') || '{}'); } catch { return {}; }
+                }
+                function _saveFoldState(state) {
+                    localStorage.setItem('fav_fold', JSON.stringify(state));
+                }
+                function toggleCol(col) {
+                    col._open = col._open === false ? true : false;
+                    const st = _getFoldState();
+                    st[col.id] = col._open;
+                    _saveFoldState(st);
+                }
+                function _restoreFold(data) {
+                    const st = _getFoldState();
+                    for (const col of data) {
+                        if (col.id in st) col._open = st[col.id];
+                    }
+                }
+
                 async function loadFav(kind) {
                     try {
                         const res = await fetch(`/api/favorites/${kind}`);
                         if (res.ok) {
                             const data = await res.json();
+                            _restoreFold(data);
                             if (kind === 'prompt') promptFav.value = data;
                             else imageFav.value = data;
                         }
@@ -1360,7 +1381,7 @@
                     } catch (e) { alert('导入失败: ' + e.message); }
                 }
 
-                return { prompt, size, quality, n, loading, loadingText, error, images, history, showHistory, activeTab, promptFav, imageFav, favModal, canFav, previewSrc, previewList, previewIdx, showFab, uploadFiles, uploadPreviews, isEditMode, userInfo, statusClass, statusText, dragEnabled, onFileSelect, removeFile, thumbMouseDown, thumbMouseUp, thumbMouseLeave, dragStart, dragOver, dragLeave, drop, dragEnd, scrollToTop, generate, download, fillPrompt, fillPromptWithParams, previewImg, previewFavImg, previewNav, closePreview, editRecord, addAsReference, deleteRecord, clearHistory, clearFav, formatTime, loadFav, openFavModal, addColInModal, confirmFav, delFavItem, renameCol, deleteCol, openNewColDialog, uploadToCol, exportFav, importFav };
+                return { prompt, size, quality, n, loading, loadingText, error, images, history, showHistory, activeTab, promptFav, imageFav, favModal, canFav, previewSrc, previewList, previewIdx, showFab, uploadFiles, uploadPreviews, isEditMode, userInfo, statusClass, statusText, dragEnabled, onFileSelect, removeFile, thumbMouseDown, thumbMouseUp, thumbMouseLeave, dragStart, dragOver, dragLeave, drop, dragEnd, scrollToTop, generate, download, fillPrompt, fillPromptWithParams, previewImg, previewFavImg, previewNav, closePreview, editRecord, addAsReference, deleteRecord, clearHistory, clearFav, formatTime, loadFav, toggleCol, openFavModal, addColInModal, confirmFav, delFavItem, renameCol, deleteCol, openNewColDialog, uploadToCol, exportFav, importFav };
             }
         }).mount('#app');
     </script>

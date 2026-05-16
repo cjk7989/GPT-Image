@@ -11,6 +11,7 @@ from datetime import datetime
 from pathlib import Path
 import hashlib
 import time
+import shutil
 import concurrent.futures
 from fastapi import FastAPI, HTTPException, Request, UploadFile, File, Form
 from fastapi.staticfiles import StaticFiles
@@ -807,6 +808,332 @@ async def delete_favorite_item(kind: str, col_id: str, item_id: str, request: Re
     return {"ok": True}
 
 
+# ── Batch processing ──
+
+BATCH_INPUT_DIR = Path(os.getenv("BATCH_INPUT_DIR", "batch_input"))
+BATCH_INPUT_DIR.mkdir(exist_ok=True)
+BATCH_TEMP_DIR = OUTPUT_DIR / "_batch_temp"
+BATCH_TEMP_DIR.mkdir(exist_ok=True)
+
+
+def _user_batch_temp(user: str) -> Path:
+    d = BATCH_TEMP_DIR / user
+    d.mkdir(exist_ok=True)
+    return d
+
+_IMAGE_EXTS = {'.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp'}
+_batch_jobs: dict[str, dict] = {}  # user -> batch job state
+_batch_lock = threading.Lock()
+
+
+def _mime_from_ext(fp: Path) -> str:
+    ext = fp.suffix.lower()
+    return {"png": "image/png", "webp": "image/webp", "gif": "image/gif"}.get(ext.lstrip("."), "image/jpeg")
+
+
+@app.get("/api/batch/scan")
+async def batch_scan(request: Request):
+    """Scan a directory for images."""
+    user = _get_user(request)
+    if not user:
+        raise HTTPException(403, "Login required")
+    path = request.query_params.get("path", "").strip()
+    scan_dir = Path(path) if path else BATCH_INPUT_DIR
+    if not scan_dir.exists():
+        return {"files": [], "dir": str(scan_dir.resolve()), "error": "目录不存在"}
+    if not scan_dir.is_dir():
+        return {"files": [], "dir": str(scan_dir.resolve()), "error": "路径不是目录"}
+    files = []
+    for f in sorted(scan_dir.iterdir()):
+        if f.is_file() and f.suffix.lower() in _IMAGE_EXTS:
+            files.append({"name": f.name, "size": f.stat().st_size, "path": str(f.resolve())})
+    return {"files": files, "dir": str(scan_dir.resolve())}
+
+
+@app.post("/api/batch/upload-fixed")
+async def batch_upload_fixed(request: Request, image: UploadFile = File(...)):
+    """Upload a fixed image for batch processing, returns server-side path."""
+    user = _get_user(request)
+    if not user:
+        raise HTTPException(403, "Login required")
+    content = await image.read()
+    safe_name = (image.filename or "image.jpg").replace("..", "_").replace("/", "_").replace("\\", "_")
+    user_temp = _user_batch_temp(user)
+    dest = user_temp / f"{uuid.uuid4().hex[:8]}_{safe_name}"
+    dest.write_bytes(content)
+    return {"path": str(dest.resolve()), "name": safe_name}
+
+
+@app.post("/api/batch/upload-enum")
+async def batch_upload_enum(request: Request):
+    """Upload multiple images for an enumerate slot, returns list of file info."""
+    user = _get_user(request)
+    if not user:
+        raise HTTPException(403, "Login required")
+    form = await request.form()
+    images = [v for k, v in form.multi_items() if k in ("images", "images[]")]
+    if not images:
+        raise HTTPException(400, "No images uploaded")
+    user_temp = _user_batch_temp(user)
+    # Clear previous temp files to avoid accumulation
+    shutil.rmtree(user_temp, ignore_errors=True)
+    user_temp.mkdir(exist_ok=True)
+    results = []
+    for image in images:
+        content = await image.read()
+        safe_name = (getattr(image, 'filename', None) or "image.jpg").replace("..", "_").replace("/", "_").replace("\\", "_")
+        dest = user_temp / f"{uuid.uuid4().hex[:8]}_{safe_name}"
+        dest.write_bytes(content)
+        results.append({"name": safe_name, "size": len(content), "path": str(dest.resolve())})
+    return {"files": results}
+
+
+@app.post("/api/batch/start")
+async def batch_start(request: Request):
+    """Start a batch processing job with multi-slot support."""
+    user = _get_user(request)
+    if not user:
+        raise HTTPException(403, "Login required")
+    body = await request.json()
+    prompt = body.get("prompt", "").strip()
+    size = body.get("size", "1024x1024")
+    quality = body.get("quality", "auto")
+    n_count = body.get("n", 1)
+    slots = body.get("slots", [])
+
+    if not prompt:
+        raise HTTPException(400, "Prompt required")
+    if not slots:
+        raise HTTPException(400, "No image slots configured")
+
+    # Validate slots and compute iteration count
+    enum_counts = []
+    for i, slot in enumerate(slots):
+        if slot["type"] == "enumerate":
+            if not slot.get("files"):
+                raise HTTPException(400, f"槽位 {i+1} 枚举目录为空")
+            enum_counts.append(len(slot["files"]))
+        elif slot["type"] == "fixed":
+            if not slot.get("path"):
+                raise HTTPException(400, f"槽位 {i+1} 未设置固定图片")
+            fixed_path = Path(slot["path"]).resolve()
+            if not fixed_path.exists():
+                raise HTTPException(400, f"槽位 {i+1} 图片不存在: {slot['path']}")
+            user_temp = _user_batch_temp(user).resolve()
+            if str(fixed_path).startswith(str(user_temp)):
+                pass  # uploaded by this user, OK
+            elif not str(fixed_path).startswith(str(BATCH_TEMP_DIR.resolve())):
+                pass  # external path, OK
+            else:
+                raise HTTPException(403, f"槽位 {i+1} 无权访问该图片")
+        else:
+            raise HTTPException(400, f"Unknown slot type: {slot['type']}")
+
+    if not enum_counts:
+        raise HTTPException(400, "至少需要一个枚举槽位")
+    iteration_count = min(enum_counts)
+
+    with _batch_lock:
+        existing = _batch_jobs.get(user)
+        if existing and not existing.get("done"):
+            raise HTTPException(409, "已有批量任务正在运行")
+        job = {
+            "id": uuid.uuid4().hex[:12],
+            "user": user,
+            "prompt": prompt,
+            "size": size,
+            "quality": quality,
+            "n": n_count,
+            "slots": slots,
+            "total": iteration_count,
+            "completed": 0,
+            "failed": 0,
+            "current": None,
+            "results": [],
+            "errors": [],
+            "done": False,
+            "paused": False,
+            "stop_requested": False,
+            "started_at": time.time(),
+        }
+        _batch_jobs[user] = job
+    _executor.submit(_run_batch_job, user)
+    return {"job_id": job["id"], "total": iteration_count}
+
+
+def _run_batch_job(user: str):
+    """Run batch processing in background thread with multi-slot support."""
+    with _batch_lock:
+        job = _batch_jobs.get(user)
+    if not job:
+        return
+    slots = job["slots"]
+
+    # Pre-load fixed images into memory
+    fixed_cache: dict[int, tuple] = {}
+    for i, slot in enumerate(slots):
+        if slot["type"] == "fixed":
+            fp = Path(slot["path"])
+            fixed_cache[i] = (fp.name, fp.read_bytes(), _mime_from_ext(fp))
+
+    # Collect enumerate file lists
+    enum_files: dict[int, list] = {}
+    for i, slot in enumerate(slots):
+        if slot["type"] == "enumerate":
+            enum_files[i] = slot["files"]
+
+    for iter_idx in range(job["total"]):
+        # Check for pause / stop
+        while job.get("paused"):
+            if job.get("stop_requested"):
+                break
+            time.sleep(1)
+        if job.get("stop_requested"):
+            break
+
+        # Build ordered image list for this iteration
+        image_files = []
+        enum_names = []
+        for i, slot in enumerate(slots):
+            if slot["type"] == "fixed":
+                image_files.append(fixed_cache[i])
+            else:
+                files = enum_files[i]
+                fp = Path(files[iter_idx % len(files)])
+                image_files.append((fp.name, fp.read_bytes(), _mime_from_ext(fp)))
+                enum_names.append(fp.name)
+
+        display_name = " + ".join(enum_names) if enum_names else f"iter_{iter_idx+1}"
+        job["current"] = {"index": iter_idx, "name": display_name}
+
+        try:
+            result = None
+            for attempt in range(1, MAX_RETRIES + 1):
+                try:
+                    result = client.images.edit(
+                        model=deployment,
+                        prompt=job["prompt"],
+                        image=image_files,
+                        n=job["n"],
+                        size=job["size"],
+                        quality=job["quality"],
+                    )
+                    break
+                except APIStatusError as e:
+                    if _is_retryable(e) and attempt < MAX_RETRIES:
+                        time.sleep(2 ** attempt)
+                        continue
+                    raise
+                except APITimeoutError:
+                    if attempt < MAX_RETRIES:
+                        time.sleep(2 ** attempt)
+                        continue
+                    raise
+
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            adir = _user_dir(user)
+            prefix = f"{user}/"
+            saved_files = []
+            result_images = []
+            for ridx, item in enumerate(result.data):
+                b64 = item.b64_json
+                if b64:
+                    filename = f"{ts}_batch_{iter_idx+1}_{ridx+1}.jpg"
+                    (adir / filename).write_bytes(base64.b64decode(b64))
+                    saved_files.append(f"{prefix}{filename}")
+                    result_images.append(f"/output/{prefix}{filename}")
+
+            del result
+            gc.collect()
+
+            if saved_files:
+                record = {
+                    "id": ts + f"_b{iter_idx}",
+                    "time": datetime.now().isoformat(),
+                    "prompt": job["prompt"],
+                    "size": job["size"],
+                    "quality": job["quality"],
+                    "n": job["n"],
+                    "type": "edit",
+                    "input_images": enum_names,
+                    "files": saved_files,
+                    "batch": True,
+                }
+                with _get_history_lock(user):
+                    history = _load_history(user)
+                    history.insert(0, record)
+                    _save_history(user, history)
+
+            job["results"].append({"file": display_name, "images": result_images})
+            job["completed"] += 1
+
+        except Exception as e:
+            traceback.print_exc()
+            job["errors"].append({"file": display_name, "error": str(e)})
+            job["failed"] += 1
+
+    job["current"] = None
+    job["done"] = True
+    job["finished_at"] = time.time()
+
+    # Cleanup user batch temp files
+    try:
+        user_temp = _user_batch_temp(user)
+        shutil.rmtree(user_temp, ignore_errors=True)
+    except Exception:
+        pass
+
+
+@app.get("/api/batch/status")
+async def batch_status(request: Request):
+    user = _get_user(request)
+    if not user:
+        raise HTTPException(403, "Login required")
+    with _batch_lock:
+        job = _batch_jobs.get(user)
+    if not job:
+        return {"active": False}
+    return {
+        "active": True,
+        "job_id": job["id"],
+        "total": job["total"],
+        "completed": job["completed"],
+        "failed": job["failed"],
+        "current": job["current"],
+        "done": job["done"],
+        "paused": job["paused"],
+        "results": job["results"][-5:],
+        "errors": job["errors"],
+    }
+
+
+@app.post("/api/batch/pause")
+async def batch_pause(request: Request):
+    user = _get_user(request)
+    if not user:
+        raise HTTPException(403, "Login required")
+    with _batch_lock:
+        job = _batch_jobs.get(user)
+    if not job or job["done"]:
+        raise HTTPException(404, "No active batch job")
+    job["paused"] = not job["paused"]
+    return {"paused": job["paused"]}
+
+
+@app.post("/api/batch/stop")
+async def batch_stop(request: Request):
+    user = _get_user(request)
+    if not user:
+        raise HTTPException(403, "Login required")
+    with _batch_lock:
+        job = _batch_jobs.get(user)
+    if not job or job["done"]:
+        raise HTTPException(404, "No active batch job")
+    job["stop_requested"] = True
+    job["paused"] = False
+    return {"ok": True}
+
+
 # Serve output images
 app.mount("/output", StaticFiles(directory=str(OUTPUT_DIR)), name="output")
 
@@ -817,6 +1144,9 @@ BUILD_VERSION = _version_file.read_text().strip() if _version_file.exists() else
 # Load index.html at startup — inject version
 _index_html = (BASE_DIR / "index.html").read_text(encoding="utf-8").replace("__BUILD_VERSION__", BUILD_VERSION)
 
+# Load batch.html at startup
+_batch_html = (BASE_DIR / "batch.html").read_text(encoding="utf-8") if (BASE_DIR / "batch.html").exists() else ""
+
 # Load sw.js at startup — inject version
 _sw_js = (BASE_DIR / "sw.js").read_text(encoding="utf-8").replace("__BUILD_VERSION__", BUILD_VERSION)
 
@@ -824,6 +1154,11 @@ _sw_js = (BASE_DIR / "sw.js").read_text(encoding="utf-8").replace("__BUILD_VERSI
 @app.get("/")
 async def index():
     return HTMLResponse(_index_html, headers={"Cache-Control": "no-cache, must-revalidate"})
+
+
+@app.get("/batch")
+async def batch_page():
+    return HTMLResponse(_batch_html, headers={"Cache-Control": "no-cache, must-revalidate"})
 
 
 @app.get("/favicon.ico")

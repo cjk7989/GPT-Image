@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Batch Processing</title>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+            min-height: 100vh;
+            color: #e0e0e0;
+        }
+        .container { max-width: 900px; margin: 0 auto; padding: 40px 20px; }
+        h1 {
+            text-align: center; font-size: 1.8rem; margin-bottom: 8px;
+            background: linear-gradient(90deg, #a78bfa, #60a5fa);
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        }
+        .subtitle { text-align: center; color: #666; font-size: 0.85rem; margin-bottom: 30px; }
+        .card {
+            background: rgba(255,255,255,0.05);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 16px; padding: 24px; margin-bottom: 20px;
+        }
+        .card h2 { font-size: 1rem; color: #a78bfa; margin-bottom: 16px; }
+        .form-group { margin-bottom: 14px; }
+        label { display: block; margin-bottom: 6px; font-size: 0.85rem; color: #a0a0a0; }
+        textarea {
+            width: 100%; min-height: 100px; padding: 12px; border-radius: 8px;
+            border: 1px solid rgba(255,255,255,0.15); background: rgba(0,0,0,0.3);
+            color: #e0e0e0; font-size: 0.95rem; resize: vertical;
+        }
+        textarea:focus { outline: none; border-color: #a78bfa; }
+        .options-row { display: flex; gap: 12px; flex-wrap: wrap; }
+        .options-row .form-group { flex: 1; min-width: 120px; }
+        select, .text-input {
+            width: 100%; padding: 10px 12px; border-radius: 8px;
+            border: 1px solid rgba(255,255,255,0.15); background: rgba(0,0,0,0.3);
+            color: #e0e0e0; font-size: 0.9rem;
+        }
+        select:focus, .text-input:focus { outline: none; border-color: #a78bfa; }
+        .btn {
+            display: block; width: 100%; padding: 14px; border: none; border-radius: 10px;
+            font-size: 1rem; font-weight: 600; cursor: pointer;
+            background: linear-gradient(135deg, #a78bfa, #60a5fa); color: #fff;
+            transition: opacity 0.2s;
+        }
+        .btn:hover { opacity: 0.9; }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .btn-sm {
+            display: inline-block; padding: 6px 14px; border-radius: 6px; border: none;
+            font-size: 0.8rem; cursor: pointer; color: #e0e0e0;
+            background: rgba(255,255,255,0.1); transition: background 0.2s;
+        }
+        .btn-sm:hover { background: rgba(255,255,255,0.2); }
+        .btn-sm:disabled { opacity: 0.5; cursor: not-allowed; }
+        .btn-danger { border: 1px solid rgba(248,113,113,0.3); color: #fca5a5; background: none; }
+        .btn-danger:hover { background: rgba(248,113,113,0.1); }
+
+        /* Slot */
+        .slot {
+            background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 12px; padding: 16px; margin-bottom: 12px;
+        }
+        .slot-header {
+            display: flex; align-items: center; gap: 10px; margin-bottom: 12px;
+        }
+        .slot-label {
+            font-weight: 600; color: #a78bfa; font-size: 0.95rem; min-width: 40px;
+        }
+        .slot-header select {
+            width: auto; padding: 6px 10px; font-size: 0.8rem;
+        }
+        .slot-header .remove-slot {
+            margin-left: auto; width: 24px; height: 24px; border-radius: 50%;
+            background: rgba(248,113,113,0.2); color: #f87171; border: none;
+            font-size: 14px; cursor: pointer; line-height: 24px; text-align: center;
+        }
+        .slot-header .remove-slot:hover { background: rgba(248,113,113,0.4); }
+        .dir-row { display: flex; gap: 8px; align-items: center; }
+        .dir-row .text-input { flex: 1; }
+        .file-list {
+            max-height: 150px; overflow-y: auto; background: rgba(0,0,0,0.2);
+            border-radius: 8px; padding: 8px 12px; margin-top: 8px; font-size: 0.8rem;
+        }
+        .file-item { color: #c0c0c0; padding: 2px 0; display: flex; justify-content: space-between; }
+        .file-item .fsize { color: #666; }
+        .scan-info { font-size: 0.8rem; color: #86efac; margin-top: 6px; }
+        .scan-error { font-size: 0.8rem; color: #fca5a5; margin-top: 6px; }
+
+        /* Fixed image */
+        .fixed-row { display: flex; gap: 8px; align-items: center; }
+        .fixed-row .text-input { flex: 1; }
+        .fixed-preview {
+            width: 48px; height: 48px; object-fit: cover; border-radius: 6px;
+            border: 1px solid rgba(255,255,255,0.15);
+        }
+        .upload-label {
+            display: inline-flex; align-items: center; gap: 4px;
+            padding: 6px 12px; border-radius: 6px; font-size: 0.8rem;
+            background: rgba(255,255,255,0.1); color: #e0e0e0; cursor: pointer;
+        }
+        .upload-label:hover { background: rgba(255,255,255,0.2); }
+        .upload-label input { display: none; }
+
+        /* Progress */
+        .progress-bar {
+            width: 100%; height: 10px; background: rgba(255,255,255,0.1);
+            border-radius: 5px; overflow: hidden; margin-bottom: 10px;
+        }
+        .progress-fill {
+            height: 100%; background: linear-gradient(90deg, #a78bfa, #60a5fa);
+            border-radius: 5px; transition: width 0.3s;
+        }
+        .status-row {
+            display: flex; justify-content: space-between; align-items: center;
+            font-size: 0.85rem; flex-wrap: wrap; gap: 4px;
+        }
+        .controls { display: flex; gap: 8px; margin-top: 12px; }
+        .error-list { margin-top: 12px; }
+        .error-item { font-size: 0.8rem; color: #f87171; padding: 2px 0; }
+
+        .hint { font-size: 0.8rem; color: #666; margin-top: 4px; }
+        .iter-info {
+            font-size: 0.85rem; color: #fcd34d; margin: 12px 0;
+            padding: 10px 14px; background: rgba(251,191,36,0.08);
+            border: 1px solid rgba(251,191,36,0.2); border-radius: 8px;
+        }
+    </style>
+</head>
+<body>
+    <div id="app" class="container">
+        <h1>🔄 批量处理</h1>
+        <p class="subtitle">多图槽位 · 枚举+固定自由组合 · 后台自动执行</p>
+
+        <!-- Prompt & Params -->
+        <div class="card">
+            <h2>📝 Prompt 与参数</h2>
+            <div class="form-group">
+                <label>Prompt（所有迭代共用）</label>
+                <textarea v-model="prompt" placeholder="例：将图一中的人物放置在图二所示的室内场景中，保持自然光影..."></textarea>
+            </div>
+            <div class="options-row">
+                <div class="form-group">
+                    <label>尺寸</label>
+                    <select v-model="size">
+                        <option value="1024x1024">1024×1024</option>
+                        <option value="512x512">512×512</option>
+                        <option value="2560x1440">2560×1440（2K横版）</option>
+                        <option value="1536x1024">1536×1024（3:2横版）</option>
+                        <option value="1280x720">1280×720（HD横版）</option>
+                        <option value="1024x1536">1024×1536（3:2竖版）</option>
+                        <option value="768x1024">768×1024（4:3竖版）</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>质量</label>
+                    <select v-model="quality">
+                        <option value="auto">Auto</option>
+                        <option value="low">Low</option>
+                        <option value="medium">Medium</option>
+                        <option value="high">High</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>每次生成数量</label>
+                    <select v-model.number="nCount">
+                        <option :value="1">1</option>
+                        <option :value="2">2</option>
+                        <option :value="3">3</option>
+                        <option :value="4">4</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+
+        <!-- Image Slots -->
+        <div class="card">
+            <h2>🖼️ 图片槽位
+                <span style="font-size:0.75rem;color:#888;font-weight:normal;margin-left:8px;">
+                    顺序对应 Prompt 中的图一、图二...
+                </span>
+            </h2>
+
+            <div class="slot" v-for="(slot, i) in slots" :key="slot.id">
+                <div class="slot-header">
+                    <span class="slot-label">图{{ i + 1 }}</span>
+                    <select v-model="slot.type" @change="onSlotTypeChange(slot)">
+                        <option value="enumerate">枚举目录</option>
+                        <option value="fixed">固定图片</option>
+                    </select>
+                    <button class="remove-slot" @click="removeSlot(i)" v-if="slots.length > 1" title="删除槽位">×</button>
+                </div>
+
+                <!-- Enumerate slot -->
+                <div v-if="slot.type === 'enumerate'">
+                    <div class="dir-row">
+                        <input class="text-input" v-model="slot.dir" placeholder="输入目录路径，如 D:\photos\people 或 batch_input">
+                        <button class="btn-sm" @click="scanSlot(slot)" :disabled="slot.scanning || !slot.dir.trim()">{{ slot.scanning ? '扫描中...' : '扫描' }}</button>
+                        <button class="btn-sm" @click="$event.currentTarget.nextElementSibling.click()">📁 上传</button>
+                        <input type="file" multiple accept="image/*" @change="uploadEnum(slot, $event)" style="display:none;">
+                    </div>
+                    <div v-if="slot.uploading" style="font-size:0.8rem;color:#93c5fd;margin-top:4px;">上传中...</div>
+                    <div v-if="slot.uploadOk" style="font-size:0.8rem;color:#86efac;margin-top:4px;">✅ {{ slot.uploadOk }}</div>
+                    <div v-if="slot.error" class="scan-error">⚠️ {{ slot.error }}</div>
+                    <div v-if="slot.files.length" class="scan-info">
+                        📂 {{ slot.dirDisplay }} — 找到 {{ slot.files.length }} 张图片
+                    </div>
+                    <div v-if="slot.files.length" class="file-list">
+                        <div class="file-item" v-for="(f, fi) in slot.files" :key="fi">
+                            <span>{{ fi + 1 }}. {{ f.name }}</span>
+                            <span class="fsize">{{ (f.size / 1024).toFixed(0) }} KB</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Fixed slot -->
+                <div v-if="slot.type === 'fixed'">
+                    <div class="fixed-row">
+                        <input class="text-input" v-model="slot.path" placeholder="输入文件路径，或点击右侧上传">
+                        <label class="upload-label">
+                            📁 上传
+                            <input type="file" accept="image/*" @change="uploadFixed(slot, $event)">
+                        </label>
+                        <img v-if="slot.preview" :src="slot.preview" class="fixed-preview">
+                    </div>
+                    <div v-if="slot.uploadStatus" style="font-size:0.8rem;margin-top:4px;" :style="{color: slot.uploadStatus.startsWith('✅') ? '#86efac' : '#fca5a5'}">
+                        {{ slot.uploadStatus }}
+                    </div>
+                </div>
+            </div>
+
+            <button class="btn-sm" @click="addSlot" style="margin-top:8px;">+ 添加图片槽位</button>
+        </div>
+
+        <!-- Iteration summary & start -->
+        <div class="card" v-if="canStart">
+            <div class="iter-info">
+                ⚡ 共 <strong>{{ iterationCount }}</strong> 次迭代，每次发送 {{ slots.length }} 张图 + 相同 Prompt
+                <span v-if="enumCounts.length > 1 && !allEnumCountsEqual">
+                    <br>⚠️ 多个枚举目录文件数不同（{{ enumCounts.join(' / ') }}），将以最少的 {{ iterationCount }} 为准
+                </span>
+            </div>
+            <button class="btn" @click="startBatch" :disabled="batchJob.active && !batchJob.done">
+                🚀 开始批量处理
+            </button>
+        </div>
+
+        <!-- Job Status -->
+        <div class="card" v-if="batchJob.active">
+            <h2>📊 执行状态</h2>
+            <div class="progress-bar">
+                <div class="progress-fill" :style="{ width: progressPct + '%' }"></div>
+            </div>
+            <div class="status-row">
+                <span style="color:#86efac;">✅ {{ batchJob.completed }} / {{ batchJob.total }}</span>
+                <span v-if="batchJob.failed" style="color:#fca5a5;">❌ 失败 {{ batchJob.failed }}</span>
+                <span v-if="batchJob.current && !batchJob.done" style="color:#a78bfa;">
+                    {{ batchJob.paused ? '⏸ 已暂停' : '🔄 ' + batchJob.current.name }}
+                </span>
+                <span v-if="batchJob.done" style="color:#60a5fa;">✅ 完成！</span>
+            </div>
+            <div class="controls" v-if="!batchJob.done">
+                <button class="btn-sm" @click="pauseBatch">{{ batchJob.paused ? '▶ 继续' : '⏸ 暂停' }}</button>
+                <button class="btn-sm btn-danger" @click="stopBatch">⏹ 停止</button>
+            </div>
+            <div class="error-list" v-if="batchJob.errors && batchJob.errors.length">
+                <div style="font-size:0.85rem;color:#fca5a5;margin-bottom:4px;">失败记录：</div>
+                <div class="error-item" v-for="e in batchJob.errors" :key="e.file">{{ e.file }}: {{ e.error }}</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const { createApp, ref, computed } = Vue;
+        let _slotIdCounter = 1;
+
+        createApp({
+            setup() {
+                const prompt = ref('');
+                const size = ref('1024x1024');
+                const quality = ref('auto');
+                const nCount = ref(1);
+
+                // Slots
+                const slots = ref([
+                    { id: _slotIdCounter++, type: 'enumerate', dir: 'batch_input', files: [], dirDisplay: '', error: '', scanning: false, uploading: false, uploadOk: '', path: '', preview: '', uploadStatus: '' },
+                ]);
+
+                function addSlot() {
+                    slots.value.push({ id: _slotIdCounter++, type: 'fixed', dir: '', files: [], dirDisplay: '', error: '', scanning: false, uploading: false, uploadOk: '', path: '', preview: '', uploadStatus: '' });
+                }
+                function removeSlot(i) {
+                    slots.value.splice(i, 1);
+                }
+                function onSlotTypeChange(slot) {
+                    slot.files = [];
+                    slot.error = '';
+                    slot.dirDisplay = '';
+                    slot.path = '';
+                    slot.preview = '';
+                    slot.uploadStatus = '';
+                    slot.uploadOk = '';
+                }
+
+                async function scanSlot(slot) {
+                    slot.scanning = true;
+                    slot.error = '';
+                    slot.files = [];
+                    try {
+                        const res = await fetch(`/api/batch/scan?path=${encodeURIComponent(slot.dir)}`);
+                        if (res.ok) {
+                            const data = await res.json();
+                            if (data.error) { slot.error = data.error; }
+                            else { slot.files = data.files; slot.dirDisplay = data.dir; }
+                        }
+                    } catch (e) { slot.error = e.message; }
+                    finally { slot.scanning = false; }
+                }
+
+                async function uploadEnum(slot, e) {
+                    const fileList = Array.from(e.target.files || []);
+                    e.target.value = '';
+                    if (!fileList.length) return;
+                    slot.uploading = true;
+                    slot.error = '';
+                    slot.uploadOk = '';
+                    try {
+                        const fd = new FormData();
+                        for (const f of fileList) fd.append('images', f);
+                        const res = await fetch('/api/batch/upload-enum', { method: 'POST', body: fd });
+                        if (res.ok) {
+                            const data = await res.json();
+                            slot.files = data.files;
+                            slot.dirDisplay = `已上传 ${data.files.length} 张图片`;
+                            slot.uploadOk = `已上传 ${data.files.length} 张图片`;
+                        } else {
+                            slot.error = '上传失败';
+                        }
+                    } catch (err) { slot.error = err.message; }
+                    finally { slot.uploading = false; }
+                }
+
+                async function uploadFixed(slot, e) {
+                    const file = e.target.files[0];
+                    if (!file) return;
+                    e.target.value = '';
+                    slot.uploadStatus = '上传中...';
+                    try {
+                        const fd = new FormData();
+                        fd.append('image', file);
+                        const res = await fetch('/api/batch/upload-fixed', { method: 'POST', body: fd });
+                        if (res.ok) {
+                            const data = await res.json();
+                            slot.path = data.path;
+                            slot.uploadStatus = `✅ 已上传: ${data.name}`;
+                            // Preview
+                            const reader = new FileReader();
+                            reader.onload = ev => slot.preview = ev.target.result;
+                            reader.readAsDataURL(file);
+                        } else {
+                            slot.uploadStatus = '❌ 上传失败';
+                        }
+                    } catch (e) { slot.uploadStatus = '❌ ' + e.message; }
+                }
+
+                // Computed
+                const enumSlots = computed(() => slots.value.filter(s => s.type === 'enumerate' && s.files.length > 0));
+                const enumCounts = computed(() => enumSlots.value.map(s => s.files.length));
+                const allEnumCountsEqual = computed(() => {
+                    const c = enumCounts.value;
+                    return c.length <= 1 || c.every(v => v === c[0]);
+                });
+                const iterationCount = computed(() => {
+                    const c = enumCounts.value;
+                    return c.length ? Math.min(...c) : 0;
+                });
+                const canStart = computed(() => {
+                    if (!prompt.value.trim()) return false;
+                    if (iterationCount.value === 0) return false;
+                    // All fixed slots must have a path
+                    for (const s of slots.value) {
+                        if (s.type === 'fixed' && !s.path.trim()) return false;
+                    }
+                    return true;
+                });
+
+                // Batch job
+                const batchJob = ref({ active: false });
+                let pollTimer = null;
+                let wasDone = true;
+
+                const progressPct = computed(() => {
+                    const j = batchJob.value;
+                    if (!j.active || !j.total) return 0;
+                    return Math.round(((j.completed + j.failed) / j.total) * 100);
+                });
+
+                async function startBatch() {
+                    const slotsData = slots.value.map(s => {
+                        if (s.type === 'enumerate') {
+                            return { type: 'enumerate', files: s.files.map(f => f.path) };
+                        } else {
+                            return { type: 'fixed', path: s.path };
+                        }
+                    });
+                    try {
+                        const res = await fetch('/api/batch/start', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                prompt: prompt.value,
+                                size: size.value,
+                                quality: quality.value,
+                                n: nCount.value,
+                                slots: slotsData,
+                            }),
+                        });
+                        if (!res.ok) {
+                            const data = await res.json().catch(() => ({}));
+                            alert(data.detail || '启动失败');
+                            return;
+                        }
+                        wasDone = false;
+                        startPolling();
+                    } catch (e) { alert('启动失败: ' + e.message); }
+                }
+
+                async function pollStatus() {
+                    try {
+                        const res = await fetch('/api/batch/status');
+                        if (res.ok) {
+                            const data = await res.json();
+                            batchJob.value = data;
+                            if (data.active && !data.done) {
+                                wasDone = false;
+                                startPolling();
+                            } else if (data.active && data.done && !wasDone) {
+                                wasDone = true;
+                                stopPolling();
+                                playNotify(data.failed > 0 ? 'error' : 'success');
+                            }
+                        }
+                    } catch (e) {}
+                }
+
+                function startPolling() {
+                    if (pollTimer) return;
+                    pollTimer = setInterval(pollStatus, 2000);
+                    pollStatus();
+                }
+                function stopPolling() {
+                    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+                }
+
+                async function pauseBatch() {
+                    try { await fetch('/api/batch/pause', { method: 'POST' }); pollStatus(); } catch (e) {}
+                }
+                async function stopBatch() {
+                    if (!confirm('确认停止批量处理？已完成的不受影响。')) return;
+                    try { await fetch('/api/batch/stop', { method: 'POST' }); pollStatus(); } catch (e) {}
+                }
+
+                function playNotify(type) {
+                    try {
+                        const ctx = new AudioContext();
+                        const osc = ctx.createOscillator();
+                        const gain = ctx.createGain();
+                        osc.connect(gain); gain.connect(ctx.destination); gain.gain.value = 0.3;
+                        if (type === 'success') {
+                            osc.frequency.value = 880; osc.type = 'sine'; osc.start();
+                            osc.frequency.setValueAtTime(880, ctx.currentTime);
+                            osc.frequency.setValueAtTime(1100, ctx.currentTime + 0.1);
+                            gain.gain.setValueAtTime(0.3, ctx.currentTime + 0.2);
+                            gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.4);
+                            osc.stop(ctx.currentTime + 0.4);
+                        } else {
+                            osc.frequency.value = 400; osc.type = 'square'; osc.start();
+                            gain.gain.setValueAtTime(0.2, ctx.currentTime + 0.15);
+                            gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.4);
+                            osc.stop(ctx.currentTime + 0.4);
+                        }
+                    } catch(e) {}
+                }
+
+                // Auto-check on load
+                pollStatus();
+
+                return {
+                    prompt, size, quality, nCount, slots,
+                    addSlot, removeSlot, onSlotTypeChange, scanSlot, uploadEnum, uploadFixed,
+                    enumCounts, allEnumCountsEqual, iterationCount, canStart,
+                    batchJob, progressPct,
+                    startBatch, pauseBatch, stopBatch,
+                };
+            }
+        }).mount('#app');
+    </script>
+</body>
+</html>
