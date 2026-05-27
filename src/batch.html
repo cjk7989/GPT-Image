@@ -260,12 +260,18 @@
                 <span v-if="batchJob.failed" style="color:#fca5a5;">❌ 失败 {{ batchJob.failed }}</span>
                 <span v-if="batchJob.current && !batchJob.done" style="color:#a78bfa;">
                     {{ batchJob.paused ? '⏸ 已暂停' : '🔄 ' + batchJob.current.name }}
+                    <span v-if="!batchJob.paused && batchJob.current.elapsed" style="color:#94a3b8;font-size:0.8rem;">
+                        ({{ Math.floor(batchJob.current.elapsed / 60) }}分{{ batchJob.current.elapsed % 60 }}秒<span v-if="batchJob.current.attempt > 1">, 第{{ batchJob.current.attempt }}次尝试</span>)
+                    </span>
                 </span>
                 <span v-if="batchJob.done" style="color:#60a5fa;">✅ 完成！</span>
             </div>
             <div class="controls" v-if="!batchJob.done">
                 <button class="btn-sm" @click="pauseBatch">{{ batchJob.paused ? '▶ 继续' : '⏸ 暂停' }}</button>
                 <button class="btn-sm btn-danger" @click="stopBatch">⏹ 停止</button>
+            </div>
+            <div class="controls" v-if="batchJob.done && batchJob.errors && batchJob.errors.length">
+                <button class="btn-sm" @click="retryFailed" style="color:#fbbf24;border-color:rgba(251,191,36,0.4);">🔄 重试失败项 ({{ batchJob.errors.length }})</button>
             </div>
             <div class="error-list" v-if="batchJob.errors && batchJob.errors.length">
                 <div style="font-size:0.85rem;color:#fca5a5;margin-bottom:4px;">失败记录：</div>
@@ -464,6 +470,19 @@
                     try { await fetch('/api/batch/stop', { method: 'POST' }); pollStatus(); } catch (e) {}
                 }
 
+                async function retryFailed() {
+                    try {
+                        const res = await fetch('/api/batch/retry', { method: 'POST' });
+                        if (!res.ok) {
+                            const data = await res.json().catch(() => ({}));
+                            alert(data.detail || '重试失败');
+                            return;
+                        }
+                        wasDone = false;
+                        startPolling();
+                    } catch (e) { alert('重试失败: ' + e.message); }
+                }
+
                 function playNotify(type) {
                     try {
                         const ctx = new AudioContext();
@@ -494,7 +513,7 @@
                     addSlot, removeSlot, onSlotTypeChange, scanSlot, uploadEnum, uploadFixed,
                     enumCounts, allEnumCountsEqual, iterationCount, canStart,
                     batchJob, progressPct,
-                    startBatch, pauseBatch, stopBatch,
+                    startBatch, pauseBatch, stopBatch, retryFailed,
                 };
             }
         }).mount('#app');

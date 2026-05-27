@@ -479,6 +479,31 @@ def _cleanup_orphan_files(user: str, file_paths: list[str]):
                 fp.unlink()
 
 
+@app.post("/api/history/batch-remove-files")
+async def batch_remove_files_from_history(request: Request):
+    """Remove specific files from history records, delete orphan files from disk."""
+    user = _get_user(request)
+    if not user:
+        raise HTTPException(status_code=403, detail="Login required")
+    body = await request.json()
+    files_to_remove = set(body.get("files", []))
+    if not files_to_remove:
+        raise HTTPException(status_code=400, detail="No files specified")
+    removed = 0
+    with _get_history_lock(user):
+        history = _load_history(user)
+        new_history = []
+        for record in history:
+            orig_len = len(record.get("files", []))
+            record["files"] = [f for f in record.get("files", []) if f not in files_to_remove]
+            removed += orig_len - len(record["files"])
+            if record["files"]:
+                new_history.append(record)
+        _save_history(user, new_history)
+    _cleanup_orphan_files(user, list(files_to_remove))
+    return {"ok": True, "removed": removed}
+
+
 @app.delete("/api/history/{record_id}")
 async def delete_history(record_id: str, request: Request):
     user = _get_user(request)
@@ -521,6 +546,40 @@ def _require_user(request: Request) -> str:
 
 
 MAX_EXPORT_BYTES = 200 * 1024 * 1024  # 200 MB
+
+
+@app.get("/api/favorites/image/{col_id}/download")
+async def download_image_collection(col_id: str, request: Request):
+    """Download all images in a collection as a zip (folder inside zip)."""
+    user = _require_user(request)
+    image_data = _load_fav(user, "image")
+    col = next((c for c in image_data if c["id"] == col_id), None)
+    if not col:
+        raise HTTPException(404, "收藏夹不存在")
+    items = col.get("items", [])
+    if not items:
+        raise HTTPException(400, "收藏夹为空")
+    folder_name = col["name"]
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        seen = set()
+        for it in items:
+            p = OUTPUT_DIR / it["path"]
+            if p.exists():
+                fname = Path(it["path"]).name
+                if fname in seen:
+                    base, ext = Path(fname).stem, Path(fname).suffix
+                    fname = f"{base}_{it['id'][:6]}{ext}"
+                seen.add(fname)
+                zf.write(p, f"{folder_name}/{fname}")
+    buf.seek(0)
+    from urllib.parse import quote
+    encoded_name = quote(folder_name + '.zip')
+    return StreamingResponse(
+        buf,
+        media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{encoded_name}"},
+    )
 
 
 @app.get("/api/favorites/export")
@@ -1004,11 +1063,13 @@ def _run_batch_job(user: str):
                 enum_names.append(fp.name)
 
         display_name = " + ".join(enum_names) if enum_names else f"iter_{iter_idx+1}"
-        job["current"] = {"index": iter_idx, "name": display_name}
+        job["current"] = {"index": iter_idx, "name": display_name, "started_at": time.time(), "attempt": 0}
 
         try:
             result = None
             for attempt in range(1, MAX_RETRIES + 1):
+                job["current"]["attempt"] = attempt
+                print(f"[Batch] user={user} iter={iter_idx+1}/{job['total']} attempt={attempt} file={display_name}")
                 try:
                     result = client.images.edit(
                         model=deployment,
@@ -1020,11 +1081,13 @@ def _run_batch_job(user: str):
                     )
                     break
                 except APIStatusError as e:
+                    print(f"[Batch] API error: status={e.status_code} msg={e.message}")
                     if _is_retryable(e) and attempt < MAX_RETRIES:
                         time.sleep(2 ** attempt)
                         continue
                     raise
                 except APITimeoutError:
+                    print(f"[Batch] Timeout on attempt {attempt}")
                     if attempt < MAX_RETRIES:
                         time.sleep(2 ** attempt)
                         continue
@@ -1069,19 +1132,21 @@ def _run_batch_job(user: str):
 
         except Exception as e:
             traceback.print_exc()
-            job["errors"].append({"file": display_name, "error": str(e)})
+            job["errors"].append({"file": display_name, "error": str(e), "iter_idx": iter_idx})
             job["failed"] += 1
 
     job["current"] = None
-    job["done"] = True
-    job["finished_at"] = time.time()
+    if not job["done"]:
+        job["done"] = True
+        job["finished_at"] = time.time()
 
-    # Cleanup user batch temp files
-    try:
-        user_temp = _user_batch_temp(user)
-        shutil.rmtree(user_temp, ignore_errors=True)
-    except Exception:
-        pass
+    # Cleanup user batch temp files only if no failures (user might retry)
+    if not job["errors"]:
+        try:
+            user_temp = _user_batch_temp(user)
+            shutil.rmtree(user_temp, ignore_errors=True)
+        except Exception:
+            pass
 
 
 @app.get("/api/batch/status")
@@ -1093,13 +1158,16 @@ async def batch_status(request: Request):
         job = _batch_jobs.get(user)
     if not job:
         return {"active": False}
+    current = job["current"]
+    if current and current.get("started_at"):
+        current = {**current, "elapsed": round(time.time() - current["started_at"])}
     return {
         "active": True,
         "job_id": job["id"],
         "total": job["total"],
         "completed": job["completed"],
         "failed": job["failed"],
-        "current": job["current"],
+        "current": current,
         "done": job["done"],
         "paused": job["paused"],
         "results": job["results"][-5:],
@@ -1131,7 +1199,185 @@ async def batch_stop(request: Request):
         raise HTTPException(404, "No active batch job")
     job["stop_requested"] = True
     job["paused"] = False
+    job["done"] = True
+    job["finished_at"] = time.time()
     return {"ok": True}
+
+
+@app.post("/api/batch/retry")
+async def batch_retry(request: Request):
+    """Retry all failed iterations from the last batch job."""
+    user = _get_user(request)
+    if not user:
+        raise HTTPException(403, "Login required")
+    with _batch_lock:
+        job = _batch_jobs.get(user)
+    if not job:
+        raise HTTPException(404, "No batch job found")
+    if not job.get("done"):
+        raise HTTPException(409, "批量任务尚未完成")
+    if not job.get("errors"):
+        raise HTTPException(400, "没有失败的项目")
+
+    # Build retry job reusing same config, only re-running failed iterations
+    failed_indices = [e["iter_idx"] for e in job["errors"] if "iter_idx" in e]
+    if not failed_indices:
+        raise HTTPException(400, "失败记录缺少索引信息，无法重试")
+
+    with _batch_lock:
+        retry_job = {
+            "id": uuid.uuid4().hex[:12],
+            "user": user,
+            "prompt": job["prompt"],
+            "size": job["size"],
+            "quality": job["quality"],
+            "n": job["n"],
+            "slots": job["slots"],
+            "total": job["completed"] + len(failed_indices),
+            "completed": job["completed"],  # carry over previous successes
+            "failed": 0,
+            "current": None,
+            "results": job["results"][:],  # keep previous results
+            "errors": [],
+            "done": False,
+            "paused": False,
+            "stop_requested": False,
+            "started_at": time.time(),
+            "_retry_indices": failed_indices,
+        }
+        _batch_jobs[user] = retry_job
+    _executor.submit(_run_batch_retry, user)
+    return {"job_id": retry_job["id"], "retry_count": len(failed_indices)}
+
+
+def _run_batch_retry(user: str):
+    """Run batch retry for failed iterations only."""
+    with _batch_lock:
+        job = _batch_jobs.get(user)
+    if not job:
+        return
+    slots = job["slots"]
+    retry_indices = job["_retry_indices"]
+
+    # Pre-load fixed images into memory
+    fixed_cache: dict[int, tuple] = {}
+    for i, slot in enumerate(slots):
+        if slot["type"] == "fixed":
+            fp = Path(slot["path"])
+            if fp.exists():
+                fixed_cache[i] = (fp.name, fp.read_bytes(), _mime_from_ext(fp))
+
+    # Collect enumerate file lists
+    enum_files: dict[int, list] = {}
+    for i, slot in enumerate(slots):
+        if slot["type"] == "enumerate":
+            enum_files[i] = slot["files"]
+
+    for retry_idx, iter_idx in enumerate(retry_indices):
+        while job.get("paused"):
+            if job.get("stop_requested"):
+                break
+            time.sleep(1)
+        if job.get("stop_requested"):
+            break
+
+        # Build image list for this iteration
+        image_files = []
+        enum_names = []
+        for i, slot in enumerate(slots):
+            if slot["type"] == "fixed":
+                image_files.append(fixed_cache[i])
+            else:
+                files = enum_files[i]
+                fp = Path(files[iter_idx % len(files)])
+                image_files.append((fp.name, fp.read_bytes(), _mime_from_ext(fp)))
+                enum_names.append(fp.name)
+
+        display_name = " + ".join(enum_names) if enum_names else f"iter_{iter_idx+1}"
+        job["current"] = {"index": retry_idx, "name": f"[重试] {display_name}", "started_at": time.time(), "attempt": 0}
+
+        try:
+            result = None
+            for attempt in range(1, MAX_RETRIES + 1):
+                job["current"]["attempt"] = attempt
+                print(f"[Batch-Retry] user={user} retry={retry_idx+1}/{len(retry_indices)} iter={iter_idx+1} attempt={attempt}")
+                try:
+                    result = client.images.edit(
+                        model=deployment,
+                        prompt=job["prompt"],
+                        image=image_files,
+                        n=job["n"],
+                        size=job["size"],
+                        quality=job["quality"],
+                    )
+                    break
+                except APIStatusError as e:
+                    print(f"[Batch-Retry] API error: status={e.status_code} msg={e.message}")
+                    if _is_retryable(e) and attempt < MAX_RETRIES:
+                        time.sleep(2 ** attempt)
+                        continue
+                    raise
+                except APITimeoutError:
+                    print(f"[Batch-Retry] Timeout on attempt {attempt}")
+                    if attempt < MAX_RETRIES:
+                        time.sleep(2 ** attempt)
+                        continue
+                    raise
+
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            adir = _user_dir(user)
+            prefix = f"{user}/"
+            saved_files = []
+            result_images = []
+            for ridx, item in enumerate(result.data):
+                b64 = item.b64_json
+                if b64:
+                    filename = f"{ts}_batch_{iter_idx+1}_{ridx+1}.jpg"
+                    (adir / filename).write_bytes(base64.b64decode(b64))
+                    saved_files.append(f"{prefix}{filename}")
+                    result_images.append(f"/output/{prefix}{filename}")
+
+            del result
+            gc.collect()
+
+            if saved_files:
+                record = {
+                    "id": ts + f"_b{iter_idx}",
+                    "time": datetime.now().isoformat(),
+                    "prompt": job["prompt"],
+                    "size": job["size"],
+                    "quality": job["quality"],
+                    "n": job["n"],
+                    "type": "edit",
+                    "input_images": enum_names,
+                    "files": saved_files,
+                    "batch": True,
+                }
+                with _get_history_lock(user):
+                    history = _load_history(user)
+                    history.insert(0, record)
+                    _save_history(user, history)
+
+            job["results"].append({"file": display_name, "images": result_images})
+            job["completed"] += 1
+
+        except Exception as e:
+            traceback.print_exc()
+            job["errors"].append({"file": display_name, "error": str(e), "iter_idx": iter_idx})
+            job["failed"] += 1
+
+    job["current"] = None
+    if not job["done"]:
+        job["done"] = True
+        job["finished_at"] = time.time()
+
+    # Cleanup temp files if no more failures
+    if not job["errors"]:
+        try:
+            user_temp = _user_batch_temp(user)
+            shutil.rmtree(user_temp, ignore_errors=True)
+        except Exception:
+            pass
 
 
 # Serve output images

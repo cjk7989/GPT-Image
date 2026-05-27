@@ -329,9 +329,18 @@
             display: flex;
             flex-wrap: wrap;
             gap: 0;
-            margin-bottom: 16px;
+            margin-bottom: 0;
             border-bottom: 1px solid rgba(255,255,255,0.1);
             align-items: center;
+        }
+        .section-sticky-header {
+            position: sticky;
+            top: 0;
+            z-index: 40;
+            background: rgba(22, 28, 50, 0.95);
+            backdrop-filter: blur(8px);
+            padding-bottom: 8px;
+            margin-bottom: 8px;
         }
         .section-tabs button {
             background: none;
@@ -445,6 +454,17 @@
         }
         .history-actions button.del { color: #f87171; }
         .history-actions a:hover, .history-actions button:hover { text-decoration: underline; }
+        /* Multi-select */
+        .select-bar { position: sticky; bottom: 0; background: rgba(30,41,59,0.95); border-top: 1px solid rgba(167,139,250,0.3); padding: 10px 16px; display: flex; align-items: center; gap: 12px; justify-content: space-between; z-index: 50; border-radius: 0 0 12px 12px; }
+        .select-bar span { color: #a78bfa; font-size: 0.9rem; }
+        .select-bar button { font-size: 0.85rem; padding: 6px 14px; border-radius: 6px; cursor: pointer; border: none; }
+        .select-bar .btn-fav { background: rgba(167,139,250,0.2); color: #a78bfa; border: 1px solid rgba(167,139,250,0.4); }
+        .select-bar .btn-del { background: rgba(239,68,68,0.15); color: #f87171; border: 1px solid rgba(239,68,68,0.4); }
+        .select-bar .btn-cancel { background: none; color: #94a3b8; border: 1px solid rgba(148,163,184,0.3); }
+        .thumb-selectable { position: relative; cursor: pointer; }
+        .thumb-selectable.selected::after { content: '✓'; position: absolute; top: 4px; right: 4px; width: 20px; height: 20px; background: #a78bfa; color: #fff; border-radius: 50%; font-size: 12px; line-height: 20px; text-align: center; }
+        .thumb-selectable::before { content: ''; position: absolute; inset: 0; border-radius: 8px; border: 2px solid transparent; transition: border-color 0.15s; pointer-events: none; }
+        .thumb-selectable.selected::before { border-color: #a78bfa; }
         /* Favorites modal */
         .fav-overlay {
             position: fixed; inset: 0; background: rgba(0,0,0,0.7);
@@ -617,21 +637,26 @@
 
         <!-- History & Favorites (hidden for anonymous) -->
         <div class="history-section" v-if="canFav">
-            <!-- Tabs -->
-            <div class="section-tabs">
-                <button :class="{ active: activeTab === 'history' }" @click="activeTab='history'">📋 历史记录 ({{ history.length }})</button>
-                <button :class="{ active: activeTab === 'prompt-fav' }" @click="activeTab='prompt-fav'; loadFav('prompt')">⭐ Prompt 收藏</button>
-                <button :class="{ active: activeTab === 'image-fav' }" @click="activeTab='image-fav'; loadFav('image')">📌 图片收藏</button>
-                <span style="flex:1;"></span>
-                <button class="tab-action" style="font-size:0.75rem;color:#888;border:none;background:none;cursor:pointer;" @click="exportFav" title="导出收藏">📤 导出</button>
-                <label class="tab-action" style="font-size:0.75rem;color:#888;cursor:pointer;padding:10px 8px;display:inline-flex;align-items:center;margin:0;">📥 导入<input type="file" accept=".zip" @change="importFav" style="display:none;"></label>
+            <!-- Sticky header: tabs + actions -->
+            <div class="section-sticky-header">
+                <div class="section-tabs">
+                    <button :class="{ active: activeTab === 'history' }" @click="activeTab='history'">📋 历史记录 ({{ history.length }})</button>
+                    <button :class="{ active: activeTab === 'prompt-fav' }" @click="activeTab='prompt-fav'; loadFav('prompt')">⭐ Prompt 收藏</button>
+                    <button :class="{ active: activeTab === 'image-fav' }" @click="activeTab='image-fav'; loadFav('image')">📌 图片收藏</button>
+                    <span style="flex:1;"></span>
+                    <button class="tab-action" style="font-size:0.75rem;color:#888;border:none;background:none;cursor:pointer;" @click="exportFav" title="导出收藏">📤 导出</button>
+                    <label class="tab-action" style="font-size:0.75rem;color:#888;cursor:pointer;padding:10px 8px;display:inline-flex;align-items:center;margin:0;">📥 导入<input type="file" accept=".zip" @change="importFav" style="display:none;"></label>
+                </div>
+                <div v-if="activeTab === 'history' && history.length" style="display:flex;justify-content:space-between;align-items:center;padding:8px 0 4px;">
+                    <button style="font-size:0.8rem;color:#a78bfa;background:none;border:1px solid rgba(167,139,250,0.3);padding:4px 12px;border-radius:6px;cursor:pointer;" @click="multiSelect = !multiSelect; selectedImages = []">
+                        {{ multiSelect ? '✖ 退出多选' : '☐ 多选' }}
+                    </button>
+                    <button style="font-size:0.8rem;color:#f87171;background:none;border:1px solid rgba(248,113,113,0.3);padding:4px 12px;border-radius:6px;cursor:pointer;" @click="clearHistory">🗑️ 清空全部历史</button>
+                </div>
             </div>
 
             <!-- History Tab -->
             <div v-if="activeTab === 'history'">
-                <div v-if="history.length" style="text-align:right;margin-bottom:10px;">
-                    <button style="font-size:0.8rem;color:#f87171;background:none;border:1px solid rgba(248,113,113,0.3);padding:4px 12px;border-radius:6px;cursor:pointer;" @click="clearHistory">🗑️ 清空全部历史</button>
-                </div>
                 <div v-if="!history.length" style="color:#666; font-size:0.9rem;">暂无历史记录</div>
                 <div class="history-item" v-for="item in history" :key="item.id">
                     <div class="history-meta">
@@ -642,15 +667,24 @@
                         {{ item.prompt }}
                     </div>
                     <div class="history-thumbs">
-                        <div v-for="f in item.files" :key="f" style="position:relative;display:inline-block;">
-                            <img :src="'/output/' + f" @click="previewImg('/output/' + f)">
-                            <button class="use-as-ref" @click="addAsReference('/output/' + f, f)" title="添加为参考图">+</button>
-                            <button style="position:absolute;bottom:2px;left:2px;width:20px;height:20px;background:rgba(167,139,250,0.8);color:#fff;border:none;border-radius:50%;font-size:12px;line-height:20px;text-align:center;cursor:pointer;padding:0;" @click="openFavModal('image', item, f)" title="收藏图片">📌</button>
+                        <div v-for="f in item.files" :key="f" style="position:relative;display:inline-block;" :class="{'thumb-selectable': multiSelect, 'selected': multiSelect && selectedImages.includes(f)}" @click="multiSelect ? toggleSelectImg(f, item, $event) : null">
+                            <img :src="'/output/' + f" @click.stop="multiSelect ? toggleSelectImg(f, item, $event) : previewImg('/output/' + f)">
+                            <button v-if="!multiSelect" class="use-as-ref" @click="addAsReference('/output/' + f, f)" title="添加为参考图">+</button>
+                            <button v-if="!multiSelect" style="position:absolute;bottom:2px;left:2px;width:20px;height:20px;background:rgba(167,139,250,0.8);color:#fff;border:none;border-radius:50%;font-size:12px;line-height:20px;text-align:center;cursor:pointer;padding:0;" @click="openFavModal('image', item, f)" title="收藏图片">📌</button>
                         </div>
                     </div>
                     <div class="history-actions">
                         <button @click="openFavModal('prompt', item)">⭐ 收藏 Prompt</button>
                         <button class="del" @click="deleteRecord(item.id)">删除</button>
+                    </div>
+                </div>
+                <!-- Multi-select action bar -->
+                <div class="select-bar" v-if="multiSelect && selectedImages.length">
+                    <span>已选 {{ selectedImages.length }} 张</span>
+                    <div style="display:flex;gap:8px;">
+                        <button class="btn-fav" @click="batchFavSelected">📌 批量收藏</button>
+                        <button class="btn-del" @click="batchDeleteSelected">🗑️ 批量删除</button>
+                        <button class="btn-cancel" @click="selectedImages = []">取消选择</button>
                     </div>
                 </div>
             </div>
@@ -694,6 +728,7 @@
                         <h3 @click="toggleCol(col)">{{ col._open === false ? '▶' : '▼' }} {{ col.name }} ({{ col.items.length }})</h3>
                         <div class="col-actions">
                             <button @click="$refs['uploadCol_' + col.id][0].click()">上传</button><input :ref="'uploadCol_' + col.id" type="file" multiple accept="image/*" @change="uploadToCol(col.id, $event)" style="display:none;">
+                            <button @click="downloadCol(col)">下载</button>
                             <button @click="renameCol('image', col)">重命名</button>
                             <button @click="deleteCol('image', col.id)">删除夹</button>
                         </div>
@@ -719,7 +754,7 @@
         <!-- Favorites Modal -->
         <div class="fav-overlay" v-if="favModal.show" @click.self="favModal.show=false">
             <div class="fav-modal">
-                <h3>{{ favModal.kind === 'prompt' ? '⭐ 收藏 Prompt' : '📌 收藏图片' }}</h3>
+                <h3>{{ favModal.batchFiles && favModal.batchFiles.length ? '📌 批量收藏 (' + favModal.batchFiles.length + ' 张)' : (favModal.kind === 'prompt' ? '⭐ 收藏 Prompt' : '📌 收藏图片') }}</h3>
                 <div v-for="col in favModal.collections" :key="col.id">
                     <label><input type="checkbox" v-model="col.checked"> {{ col.name }}</label>
                 </div>
@@ -763,6 +798,9 @@
                 const history = ref([]);
                 const showHistory = ref(true);
                 const activeTab = ref('history');
+                const multiSelect = ref(false);
+                const selectedImages = ref([]);  // array of file paths
+                const selectedMeta = ref({});   // path -> {item}
                 const promptFav = ref([]);
                 const imageFav = ref([]);
                 const favModal = ref({ show: false, kind: 'prompt', item: null, file: null, collections: [], newName: '' });
@@ -785,7 +823,7 @@
                     if (!userInfo.value) return '';
                     if (userInfo.value.name === 'local') return '🖥️ 本地模式';
                     if (userInfo.value.logged_in) return `👤 ${userInfo.value.name}`;
-                    return '⚠️ 未登录 · 历史记录不可用';
+                    return '⚠️ 未登录 · 记录与收藏功能不可用';
                 });
                 async function loadUser() {
                     try {
@@ -1206,6 +1244,91 @@
                     }
                 }
 
+                // ── Multi-select for batch fav ──
+                let _lastSelectedFile = null;
+
+                function _allVisibleFiles() {
+                    // Build flat ordered list of all file paths in history
+                    const files = [];
+                    for (const item of history.value) {
+                        for (const f of (item.files || [])) {
+                            files.push({ f, item });
+                        }
+                    }
+                    return files;
+                }
+
+                function toggleSelectImg(f, item, event) {
+                    if (event && event.shiftKey && _lastSelectedFile) {
+                        // Shift-click: select range
+                        const all = _allVisibleFiles();
+                        const idxA = all.findIndex(x => x.f === _lastSelectedFile);
+                        const idxB = all.findIndex(x => x.f === f);
+                        if (idxA >= 0 && idxB >= 0) {
+                            const start = Math.min(idxA, idxB);
+                            const end = Math.max(idxA, idxB);
+                            for (let i = start; i <= end; i++) {
+                                const { f: file, item: it } = all[i];
+                                if (!selectedImages.value.includes(file)) {
+                                    selectedImages.value.push(file);
+                                    selectedMeta.value[file] = it;
+                                }
+                            }
+                        }
+                    } else {
+                        const idx = selectedImages.value.indexOf(f);
+                        if (idx >= 0) {
+                            selectedImages.value.splice(idx, 1);
+                            delete selectedMeta.value[f];
+                        } else {
+                            selectedImages.value.push(f);
+                            selectedMeta.value[f] = item;
+                        }
+                    }
+                    _lastSelectedFile = f;
+                }
+
+                async function batchDeleteSelected() {
+                    const count = selectedImages.value.length;
+                    if (!count) return;
+                    if (!confirm(`确认删除已选的 ${count} 张图片？（被收藏引用的文件不会被删除）`)) return;
+                    try {
+                        const res = await fetch('/api/history/batch-remove-files', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ files: selectedImages.value })
+                        });
+                        if (res.ok) {
+                            selectedImages.value = [];
+                            selectedMeta.value = {};
+                            _lastSelectedFile = null;
+                            loadHistory();
+                        }
+                    } catch (e) {}
+                }
+
+                function batchFavSelected() {
+                    const src = imageFav;
+                    if (!src.value.length) {
+                        loadFav('image').then(() => _showBatchFavModal());
+                    } else {
+                        _showBatchFavModal();
+                    }
+                }
+
+                function _showBatchFavModal() {
+                    favModal.value = {
+                        show: true,
+                        kind: 'image',
+                        item: null,
+                        file: null,
+                        batchFiles: selectedImages.value.slice(),
+                        batchMeta: { ...selectedMeta.value },
+                        collections: imageFav.value.map(c => ({ ...c, checked: imageFav.value.length === 1 })),
+                        newName: '',
+                    };
+                }
+
                 async function loadFav(kind) {
                     try {
                         const res = await fetch(`/api/favorites/${kind}`);
@@ -1263,6 +1386,28 @@
                     const m = favModal.value;
                     const checkedIds = m.collections.filter(c => c.checked).map(c => c.id);
                     if (!checkedIds.length) { alert('请至少选择一个收藏夹'); return; }
+
+                    // Batch mode
+                    if (m.batchFiles && m.batchFiles.length) {
+                        try {
+                            for (const f of m.batchFiles) {
+                                const item = m.batchMeta[f] || {};
+                                await fetch(`/api/favorites/image/item`, {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ collection_ids: checkedIds, path: f, prompt: item.prompt || '' }),
+                                });
+                            }
+                            await loadFav('image');
+                            m.show = false;
+                            selectedImages.value = [];
+                            selectedMeta.value = {};
+                            multiSelect.value = false;
+                        } catch (e) {}
+                        return;
+                    }
+
+                    // Single mode
                     const body = { collection_ids: checkedIds };
                     if (m.kind === 'prompt') {
                         body.prompt = m.item.prompt;
@@ -1345,6 +1490,23 @@
                     } catch (e) { alert('上传失败: ' + e.message); }
                 }
 
+                async function downloadCol(col) {
+                    try {
+                        const res = await fetch(`/api/favorites/image/${col.id}/download`);
+                        if (!res.ok) {
+                            const data = await res.json().catch(() => ({}));
+                            alert(data.detail || '下载失败');
+                            return;
+                        }
+                        const blob = await res.blob();
+                        const a = document.createElement('a');
+                        a.href = URL.createObjectURL(blob);
+                        a.download = col.name + '.zip';
+                        a.click();
+                        URL.revokeObjectURL(a.href);
+                    } catch (e) { alert('下载失败: ' + e.message); }
+                }
+
                 function fillPromptWithParams(item) {
                     prompt.value = item.prompt;
                     if (item.size) size.value = item.size;
@@ -1381,7 +1543,7 @@
                     } catch (e) { alert('导入失败: ' + e.message); }
                 }
 
-                return { prompt, size, quality, n, loading, loadingText, error, images, history, showHistory, activeTab, promptFav, imageFav, favModal, canFav, previewSrc, previewList, previewIdx, showFab, uploadFiles, uploadPreviews, isEditMode, userInfo, statusClass, statusText, dragEnabled, onFileSelect, removeFile, thumbMouseDown, thumbMouseUp, thumbMouseLeave, dragStart, dragOver, dragLeave, drop, dragEnd, scrollToTop, generate, download, fillPrompt, fillPromptWithParams, previewImg, previewFavImg, previewNav, closePreview, editRecord, addAsReference, deleteRecord, clearHistory, clearFav, formatTime, loadFav, toggleCol, openFavModal, addColInModal, confirmFav, delFavItem, renameCol, deleteCol, openNewColDialog, uploadToCol, exportFav, importFav };
+                return { prompt, size, quality, n, loading, loadingText, error, images, history, showHistory, activeTab, multiSelect, selectedImages, promptFav, imageFav, favModal, canFav, previewSrc, previewList, previewIdx, showFab, uploadFiles, uploadPreviews, isEditMode, userInfo, statusClass, statusText, dragEnabled, onFileSelect, removeFile, thumbMouseDown, thumbMouseUp, thumbMouseLeave, dragStart, dragOver, dragLeave, drop, dragEnd, scrollToTop, generate, download, fillPrompt, fillPromptWithParams, previewImg, previewFavImg, previewNav, closePreview, editRecord, addAsReference, deleteRecord, clearHistory, clearFav, formatTime, loadFav, toggleCol, openFavModal, addColInModal, confirmFav, delFavItem, renameCol, deleteCol, openNewColDialog, uploadToCol, downloadCol, exportFav, importFav, toggleSelectImg, batchFavSelected, batchDeleteSelected };
             }
         }).mount('#app');
     </script>
